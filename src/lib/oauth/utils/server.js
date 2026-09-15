@@ -648,21 +648,24 @@ let zedProxyTimeout = null;
 let zedProxyPort = null;
 let zedSession = null;
 
-export function registerZedSession({ state, codeVerifier }) {
+export function registerZedSession({ state, codeVerifier, provider = "zed" }) {
   if (!state || !codeVerifier) return false;
-  zedSession = { state, codeVerifier, status: "pending", createdAt: Date.now() };
+  zedSession = { state, codeVerifier, provider, status: "pending", createdAt: Date.now() };
   return true;
 }
-export function getZedSessionStatus(state) {
+export function getZedSessionStatus(state, provider = null) {
   if (!zedSession) return null;
   if (state && zedSession.state !== state) return null;
+  // The listener is a singleton, so guard against answering a poll for the other
+  // member of the Zed family (zed vs capnzed) that happens to share the state.
+  if (provider && zedSession.provider && zedSession.provider !== provider) return null;
   return zedSession;
 }
 export function clearZedSession(state) {
   if (!state || (zedSession && zedSession.state === state)) zedSession = null;
 }
 
-export function startZedProxy(preferredPort = 0) {
+export function startZedProxy(preferredPort = 0, provider = "zed") {
   return new Promise((resolve) => {
     if (zedProxyServer) {
       resolve({ success: true, port: zedProxyPort, callbackUrl: `http://127.0.0.1:${zedProxyPort}/` });
@@ -700,9 +703,9 @@ export function startZedProxy(preferredPort = 0) {
       try {
         const { exchangeTokens } = await import("../providers.js");
         const { createProviderConnection } = await import("@/models");
-        const tokenData = await exchangeTokens("zed", rawCallback, null, session.codeVerifier, session.state);
+        const tokenData = await exchangeTokens(session.provider || "zed", rawCallback, null, session.codeVerifier, session.state);
         const connection = await createProviderConnection({
-          provider: "zed",
+          provider: session.provider || "zed",
           authType: "oauth",
           ...tokenData,
           testStatus: "active",

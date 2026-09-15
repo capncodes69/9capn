@@ -213,6 +213,17 @@ export const ZED_HOSTED_CONFIG = {
   oauthTimeoutMs: 600_000,
 };
 
+// CapnZed — 9capn's own Zed trial provider. Same RSA native-app transport as
+// ZED_HOSTED_CONFIG (same hosts, same callback port), kept separate so the two
+// providers can be configured and reasoned about independently.
+export const CAPNZED_HOSTED_CONFIG = {
+  webBaseUrl: "https://zed.dev",
+  cloudBaseUrl: "https://cloud.zed.dev",
+  llmBaseUrl: "https://cloud.zed.dev",
+  defaultNativeAppPort: 58444,
+  oauthTimeoutMs: 600_000,
+};
+
 // OAuth timeout (5 minutes)
 export const OAUTH_TIMEOUT = 300000;
 

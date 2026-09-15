@@ -42,7 +42,16 @@ import {
   clearXiaomiMimoSession,
 } from "@/lib/oauth/utils/server";
 import { detectIdeInstalled } from "@/lib/oauth/utils/ideDetect";
-import { ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
+import { ZED_HOSTED_CONFIG, CAPNZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
+
+// Zed and CapnZed speak the same RSA native-app transport; they differ only in
+// provider id and preferred callback port. Keep both on the same code path so a
+// fix to one applies to the other.
+const ZED_FAMILY = {
+  zed: ZED_HOSTED_CONFIG.defaultNativeAppPort,
+  capnzed: CAPNZED_HOSTED_CONFIG.defaultNativeAppPort,
+};
+const isZedFamily = (provider) => Object.prototype.hasOwnProperty.call(ZED_FAMILY, provider);
 
 async function completeXaiManualCode(code, state) {
   const session = state ? getXaiSessionStatus(state) : null;
@@ -129,7 +138,7 @@ export async function GET(request, { params }) {
       searchParams.forEach((value, key) => { if (!reservedParams.has(key)) meta[key] = value; });
       // Zed: derive native_app_port from the local callback URL so the RSA keypair
       // is bound to the port the proxy is actually listening on.
-      if (provider === "zed") {
+      if (isZedFamily(provider)) {
         try { const p = new URL(redirectUri).port; if (p) meta.nativeAppPort = p; } catch { /* ignore */ }
       }
       const authData = await generateAuthData(provider, redirectUri, Object.keys(meta).length ? meta : undefined);
@@ -147,10 +156,11 @@ export async function GET(request, { params }) {
         const result = await startWindsurfProxy();
         return NextResponse.json(result);
       }
-      if (provider === "zed") {
-        // Prefer ZED_HOSTED_CONFIG.defaultNativeAppPort (58443) so the browser redirect
+      if (isZedFamily(provider)) {
+        // Prefer the provider's default callback port so the browser redirect
         // matches what Zed expects; falls back to a random port if it's busy.
-        const result = await startZedProxy(searchParams.get("native_app_port") || ZED_HOSTED_CONFIG.defaultNativeAppPort);
+        const preferred = searchParams.get("native_app_port") || ZED_FAMILY[provider];
+        const result = await startZedProxy(preferred, provider);
         return NextResponse.json(result);
       }
       if (provider === "xiaomi-mimo") {
@@ -187,7 +197,7 @@ export async function GET(request, { params }) {
       let session;
       if (provider === "trae") session = getTraeSessionStatus(state);
       else if (provider === "windsurf") session = getWindsurfSessionStatus(state);
-      else if (provider === "zed") session = getZedSessionStatus(state);
+      else if (isZedFamily(provider)) session = getZedSessionStatus(state, provider);
       else if (provider === "xai") session = getXaiSessionStatus(state);
       else if (provider === "codex") session = getCodexSessionStatus(state);
       else if (provider === "xiaomi-mimo") session = getXiaomiMimoSessionStatus(state);
@@ -207,7 +217,7 @@ export async function GET(request, { params }) {
         }
         if (provider === "trae") clearTraeSession(state);
         else if (provider === "windsurf") clearWindsurfSession(state);
-        else if (provider === "zed") clearZedSession(state);
+        else if (isZedFamily(provider)) clearZedSession(state);
         else if (provider === "xai") clearXaiSession(state);
         else clearCodexSession(state);
         return NextResponse.json(payload);
@@ -218,7 +228,7 @@ export async function GET(request, { params }) {
     if (action === "stop-proxy") {
       if (provider === "trae") stopTraeProxy();
       else if (provider === "windsurf") stopWindsurfProxy();
-      else if (provider === "zed") stopZedProxy();
+      else if (isZedFamily(provider)) stopZedProxy();
       else if (provider === "xai") stopXaiProxy();
       else if (provider === "codex") stopCodexProxy();
       else if (provider === "xiaomi-mimo") stopXiaomiMimoProxy();
@@ -310,7 +320,7 @@ export async function POST(request, { params }) {
       let ok = false;
       if (provider === "trae") ok = registerTraeSession({ state });
       else if (provider === "windsurf") ok = registerWindsurfSession({ state });
-      else if (provider === "zed") ok = registerZedSession({ state, codeVerifier: body?.codeVerifier });
+      else if (isZedFamily(provider)) ok = registerZedSession({ state, codeVerifier: body?.codeVerifier, provider });
       else return NextResponse.json({ error: "register-session only supported for trae/windsurf/zed" }, { status: 400 });
       return NextResponse.json({ success: ok });
     }
