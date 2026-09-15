@@ -1,0 +1,54 @@
+# Deploys the gateway to Fly.io (app `9capn` — see fly.9capn.toml).
+#
+# Repository secret required:
+#   FLY_API_TOKEN — a deploy-scoped token: `flyctl tokens create deploy -a 9capn`
+#
+# Runtime secrets (INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, …) are NOT
+# managed here. They live in Fly and survive a deploy; set them once with
+# `flyctl secrets set`.
+name: Deploy to Fly.io
+
+on:
+  push:
+    # master is this repo's default branch. main is listed too, so a future
+    # rename keeps deploying without editing this file.
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never run two deploys at once: a half-applied release is worse than a
+  # slightly stale one, so queue instead of cancelling.
+  group: fly-9capn-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check FLY_API_TOKEN
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::FLY_API_TOKEN is not set. Create one with: flyctl tokens create deploy -a 9capn"
+            echo "::error::Then add it as a repository secret (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --remote-only builds on Fly's builders, which keeps their layer cache
+      # warm between runs and keeps this Next.js build off the runner's disk.
+      - name: Deploy to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config fly.9capn.toml --remote-only
