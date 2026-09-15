@@ -137,6 +137,18 @@ export function createSSEStream(options = {}) {
           let injectedUsage = false;
           let responsesTerminal = false;
 
+          // Upstream [DONE] sentinel. Forward the first one through the normal
+          // path below (so its framing/blank-line separator is preserved) and
+          // drop any repeat. Recording it also stops flush() from appending a
+          // second terminator: executors that already emit their own [DONE] on
+          // the wire (Qoder — see wrapQoderSSE) would otherwise ship two frames,
+          // which some clients treat as a stream error.
+          if (trimmed.startsWith("data:") && trimmed.slice(5).trim() === "[DONE]") {
+            if (streamDoneSent) continue;
+            streamDoneSent = true;
+            // fall through — the shared forwarding logic below emits this line
+          }
+
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
               const parsed = JSON.parse(trimmed.slice(5).trim());
@@ -384,12 +396,23 @@ export function createSSEStream(options = {}) {
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
           if (buffer) {
-            let output = buffer;
-            if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
-              output = "data: " + buffer.slice(5);
+            const pending = buffer.trim();
+            const pendingIsDone = pending.startsWith("data:") && pending.slice(5).trim() === "[DONE]";
+            if (pendingIsDone) {
+              // Trailing sentinel that arrived without its blank-line terminator:
+              // emit it canonically and mark it so the terminator guard below
+              // doesn't append a second [DONE].
+              streamDoneSent = true;
+              reqLogger?.appendConvertedChunk?.(SSE_DONE);
+              controller.enqueue(sharedEncoder.encode(SSE_DONE));
+            } else {
+              let output = buffer;
+              if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
+                output = "data: " + buffer.slice(5);
+              }
+              reqLogger?.appendConvertedChunk?.(output);
+              controller.enqueue(sharedEncoder.encode(output));
             }
-            reqLogger?.appendConvertedChunk?.(output);
-            controller.enqueue(sharedEncoder.encode(output));
           }
 
           // IMPORTANT: In passthrough mode we still must terminate the SSE stream.
