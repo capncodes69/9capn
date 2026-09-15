@@ -584,6 +584,27 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
+      case "freebuff":
+        // Session quotas keyed by model id — label rows with the friendly
+        // displayName (from the registry) and keep modelKey for ordering.
+        // Metered rows carry the live Freebucks price (price) + promo tagline
+        // (priceNote), both server-authoritative.
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([modelKey, quota]) => {
+            normalizedQuotas.push({
+              name: quota.displayName || modelKey,
+              modelKey,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              recurring: quota.recurring !== false,
+              price: quota.price,
+              priceNote: quota.priceNote,
+            });
+          });
+        }
+        break;
+
       case "kimi":
         // Weekly / Ratelimit from /v1/usages. Prefer remainingPercentage only.
         if (data.quotas) {

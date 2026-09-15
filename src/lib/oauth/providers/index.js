@@ -8,6 +8,7 @@ import claude from "./claude.js";
 import codex from "./codex.js";
 import xai from "./xai.js";
 import grokCli from "./grok-cli.js";
+import freebuff from "./freebuff.js";
 import geminiCli from "./gemini-cli.js";
 import antigravity from "./antigravity.js";
 import iflow from "./iflow.js";
@@ -40,6 +41,7 @@ const PROVIDERS = {
   github,
   kiro,
   cursor,
+  freebuff,
   kimi,
   kilocode,
   cline,

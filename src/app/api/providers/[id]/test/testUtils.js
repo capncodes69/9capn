@@ -103,6 +103,22 @@ const OAUTH_TEST_CONFIG = {
     },
     refreshable: false,
   },
+  freebuff: {
+    // The session endpoint doubles as the auth probe: GET never claims a
+    // session (POST would burn 1.0 unit of the daily quota). 401 = bad token,
+    // 403 = region/account gate (token still valid), 404 = no session row yet
+    // (pre-join, token valid). No refresh path — when the authToken dies the
+    // user re-logs in.
+    url: "https://www.codebuff.com/api/v1/freebuff/session",
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    extraHeaders: { Accept: "application/json", "User-Agent": "codebuff-cli/0.0.138" },
+    acceptStatuses: [403, 404],
+    softFailMessage: {
+      403: "Connected, but Freebuff is gated (403) — country blocked or account banned.",
+    },
+  },
   // Grok CLI / Grok Build — probe /v1/user (no inference quota). Headers mirror official CLI.
   "grok-cli": {
     url: PROVIDERS["grok-cli"]?.userUrl || "https://cli-chat-proxy.grok.com/v1/user",
