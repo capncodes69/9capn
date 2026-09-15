@@ -67,6 +67,23 @@ const PROVIDERS = {
 const PREFIX_PEEK_BYTES = 64 * 1024;
 
 /**
+ * Model families Zed relays through Baseten (open weights). Needed only as a
+ * fallback: the live catalog carries an explicit `provider` per model, and that
+ * always wins. Keep in sync with the static catalog in registry/capnzed.js.
+ */
+const BASETEN_FAMILIES = [
+  "baseten",
+  "deepseek",
+  "glm",
+  "kimi",
+  "minimax",
+  "mimo",
+  "qwen",
+  "muse-spark",
+  "hy3",
+];
+
+/**
  * Map a catalog `provider` (or a model id) to Zed's relay provider enum.
  * Baseten relays an OpenAI Chat Completions body — it must NOT fall through to
  * OpenAi, which would send a Responses-shaped body and get rejected.
@@ -83,7 +100,7 @@ export function normalizeCapnZedProvider(value, model) {
   if (m.includes("claude")) return PROVIDERS.anthropic;
   if (m.includes("gemini")) return PROVIDERS.google;
   if (m.includes("grok") || m.includes("xai")) return PROVIDERS.xai;
-  if (m.includes("baseten")) return PROVIDERS.baseten;
+  if (BASETEN_FAMILIES.some((family) => m.includes(family))) return PROVIDERS.baseten;
   return PROVIDERS.openai;
 }
 

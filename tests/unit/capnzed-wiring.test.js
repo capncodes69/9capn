@@ -20,8 +20,11 @@ describe("CapnZed is wired end to end", () => {
     expect(entry.alias).toBe("czd");
     expect(entry.uiAlias).toBe("czd");
     expect(entry.display.name).toBe("CapnZed");
-    // Live catalog only — a hardcoded model list would go stale immediately.
-    expect(entry.models).toEqual([]);
+    // Static floor for the picker (the ids Zed's own client ships) plus
+    // passthrough, so the live /models read stays authoritative and an unknown
+    // id is still forwarded rather than rejected.
+    expect(entry.models.length).toBeGreaterThan(50);
+    expect(entry.models.some((m) => m.id === "gpt-5.6-luna")).toBe(true);
     expect(entry.passthroughModels).toBe(true);
     expect(entry.features?.usage).toBe(true);
   });

@@ -9,6 +9,7 @@ import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
+import { resolveCapnZedModels } from "open-sse/shared/capnzedAuth.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
@@ -450,6 +451,53 @@ const PROVIDER_MODELS_CONFIG = {
       };
     },
   },
+  // CapnZed: the catalog lives on cloud.zed.dev/models (per-account plan view),
+  // so it must be read live with the connection's own credentials rather than
+  // copied from the registry's static floor list.
+  capnzed: {
+    customResolver: async (connection) => {
+      const proxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+      const credentials = {
+        accessToken: connection.accessToken,
+        apiKey: connection.apiKey,
+        connectionId: connection.id,
+        providerSpecificData: connection.providerSpecificData || {},
+      };
+      const proxyOptions = {
+        connectionProxyEnabled: proxy.connectionProxyEnabled === true,
+        connectionProxyUrl: proxy.connectionProxyUrl || "",
+        connectionNoProxy: proxy.connectionNoProxy || "",
+        vercelRelayUrl: proxy.vercelRelayUrl || "",
+        strictProxy: proxy.strictProxy === true,
+      };
+      let warning;
+      try {
+        const catalog = await resolveCapnZedModels(credentials, { forceRefresh: true, proxyOptions });
+        if (catalog?.models?.length) {
+          return {
+            models: catalog.models.map((model) => ({
+              id: model.id,
+              name: model.name,
+              contextLength: model.contextLength,
+              maxOutputTokens: model.maxOutputTokens,
+              capabilities: [
+                model.supportsImages ? "vision" : null,
+                model.supportsThinking ? "reasoning" : null,
+              ].filter(Boolean),
+              isDefault: catalog.defaultModel ? model.id === catalog.defaultModel : undefined,
+              zedProvider: model.provider,
+            })),
+          };
+        }
+        warning = "Zed returned no models; falling back to static catalog.";
+      } catch (error) {
+        warning = `Failed to fetch Zed models: ${error.message}`;
+        console.log("Failed to fetch CapnZed models dynamically, falling back to static:", error.message);
+      }
+      return { models: getStaticProviderModels("capnzed"), warning };
+    },
+  },
+
   "ollama-local": {
     customResolver: async (connection) => {
       const url = `${resolveOllamaLocalHost(connection)}/api/tags`;
