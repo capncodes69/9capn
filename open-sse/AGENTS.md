@@ -37,3 +37,4 @@ Provider-agnostic SSE engine: one OpenAI-style request → any provider (LLM cha
 - `registry/index.js` is an auto-generated static import list; regenerate it (don't hand-edit) after adding a `registry/{id}.js`. REGISTRY_TEMPLATE is excluded by design.
 - Special binary/protobuf formats (kiro EventStream, cursor protobuf, commandcode NDJSON) don't round-trip through OpenAI — handle in their executor.
 - `rtk/` + `headroom.js` mutate the request body in-place and are **fail-open**: any error returns null and leaves the body untouched — never throw out of them. RTK skips `is_error`/`status:"error"` tool results to preserve traces.
+- Freebuff's session tier is bound to the egress IP, so `handlers/chatCore/proxyGuard.js` forces `strictProxy` (a failing pool must throw, never fall back to direct) and refuses a request with no pool/relay/legacy proxy. `FREEBUFF_ALLOW_DIRECT=1` opts out of the refusal only.
