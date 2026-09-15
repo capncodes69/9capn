@@ -232,6 +232,16 @@ export const PROVIDER_CAPABILITIES = {
   // modelConfig.is_reasoning — client thinking intent is dropped, so "none"
   // must never be offered as an option.
   "qoder": {
+    // Sonus / Cantus — Qoder's own frontier models. RE'd wire block:
+    // {is_vl:true, is_reasoning:true, max_input_tokens:180000, format:"openai"};
+    // the CLI picker shows 200K context / "High" reasoning / 3.2x credits. The
+    // per-account catalog rarely lists them, so chat falls back to the static
+    // block in shared/qoder/constants.js — but capability lookup still needs a
+    // row here, otherwise both land on DEFAULT_CAPABILITIES (which claims a
+    // text-only, non-reasoning model). thinkingFormat follows the RE'd `format`
+    // because the underlying family is not exposed.
+    "smodel":         { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 200000 }, // Sonus
+    "cmodel":         { vision: true, reasoning: true, thinkingFormat: "openai", thinkingCanDisable: false, contextWindow: 200000 }, // Cantus
     "ultimate":       { vision: true, reasoning: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 }, // Claude Opus 5
     "performance":    { vision: true, reasoning: true, thinkingFormat: "claude-adaptive", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 128000 }, // Claude Sonnet 5
     "dmodel":         { reasoning: true, thinkingFormat: "deepseek", thinkingCanDisable: false, contextWindow: 1000000, maxOutput: 65536 },  // DeepSeek-V4-Pro

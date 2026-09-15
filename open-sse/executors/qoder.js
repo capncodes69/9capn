@@ -17,7 +17,10 @@
  *     translator layer feeds us "qoder/<key>" so we strip the prefix.
  *   - Per-model `model_config` is fetched live from /algo/api/v2/model/list
  *     and cached. Sending the wrong block silently downgrades to a
- *     different model upstream, so a missing entry is a hard error.
+ *     different model upstream, so an entry we can't supply at all is a
+ *     hard error. Keys that the per-account catalog omits but we have an
+ *     RE'd static block for (Sonus `smodel` / Cantus `cmodel`) fall back to
+ *     that block — see getQoderStaticModelConfig.
  */
 
 import { qoderEncodeBody } from "../shared/qoder/encoding.js";
@@ -33,6 +36,7 @@ import { FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import {
   QODER_CHAT_SIG_PATH,
   QODER_CONTEXT_TIER_ENV,
+  getQoderStaticModelConfig,
   qoderInferenceBase,
 } from "../shared/qoder/constants.js";
 import { getQoderModelConfig, resolveQoderModels, isQoderPat, resolveQoderCredentials } from "../services/qoderModels.js";
@@ -41,6 +45,12 @@ import { encodeDataUri } from "../translator/concerns/image.js";
 import { createQoderSseCoalescer } from "../shared/qoder/sse.js";
 import { rewriteQoderMessageAttachments } from "../shared/qoder/attachments.js";
 import { resolveQoderContextTier, applyQoderContextTier } from "../shared/qoder/contextTier.js";
+import { buildQoderPersona, resolvePersonaMode } from "../shared/qoder/persona.js";
+import {
+  buildQoderParameters,
+  qoderThinkingDisablesReasoning,
+  resolveQoderThinking,
+} from "../shared/qoder/reasoning.js";
 
 /**
  * Hoist role:"system" messages out of the messages array (Qoder rejects
@@ -218,12 +228,27 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
     // not be populated yet on first ever call for this credential.
     const refreshed = await resolveQoderModels(credentials, { forceRefresh: true, log, proxyOptions, signal });
     const retried = refreshed?.rawConfigs.get(qoderKey);
-    if (!retried) {
+    if (retried) {
+      modelConfig = { ...retried, key: qoderKey };
+    } else {
+      // The per-account catalog doesn't publish this key. This is normal for
+      // the frontier models Sonus (smodel) / Cantus (cmodel), which the plan
+      // exposes in the CLI picker but the model-list API often omits. The chat
+      // endpoint accepts a known key without a catalog entry, so fall back to
+      // the RE'd static block instead of failing the request.
+      modelConfig = getQoderStaticModelConfig(qoderKey);
+      if (modelConfig) {
+        log?.info?.(
+          "QODER",
+          `model_config for "${qoderKey}" missing from catalog; using static fallback (${modelConfig.display_name})`,
+        );
+      }
+    }
+    if (!modelConfig) {
       throw new Error(
         `qoder: model_config for "${qoderKey}" not yet known (run a model list fetch or check upstream connectivity)`,
       );
     }
-    modelConfig = { ...retried, key: qoderKey };
   }
 
   const incoming = Array.isArray(body.messages)
@@ -249,9 +274,26 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
     log?.warn?.("QODER", `attachment rewrite failed: ${err.message}`);
   }
 
-  const { messages, systemText } = normalizeMessages(incoming);
+  const { messages, systemText: callerSystemText } = normalizeMessages(incoming);
   const tools = body.tools;
-  const isReasoning = !!modelConfig.is_reasoning;
+
+  // Ground the request in the qodercli persona. A plain-chat client arrives with
+  // `system: ""` and `tools: []`, so without this the model gets none of the
+  // framing qodercli always sends and reads as design-blind. See
+  // shared/qoder/persona.js (QODER_PERSONA=off|append|replace).
+  const persona = buildQoderPersona({
+    systemText: callerSystemText,
+    tools,
+    mode: resolvePersonaMode(),
+  });
+  const systemText = persona.system;
+  if (persona.persona) {
+    log?.info?.(
+      "QODER",
+      `persona injected (+${Math.max(0, systemText.length - callerSystemText.length)} chars, ${persona.skillCount} skills listed)`,
+    );
+  }
+  let isReasoning = !!modelConfig.is_reasoning;
   const maxOutputTokens = Number(modelConfig.max_output_tokens) || 0;
 
   let maxTokens = 32_768;
@@ -261,6 +303,24 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
   }
   if (typeof body.max_completion_tokens === "number" && body.max_completion_tokens > 0 && body.max_completion_tokens < maxTokens) {
     maxTokens = body.max_completion_tokens;
+  }
+
+  // qodercli derives `parameters` from a generation config; honour the same
+  // thinking intent here instead of silently dropping the client's effort, and
+  // fall back to the gateway default (xhigh for Sonus/Cantus) when the client
+  // expressed none — a plain chat client should still get deep thinking.
+  const thinking = resolveQoderThinking(body, { key: qoderKey, modelConfig });
+  const parameters = buildQoderParameters({ maxTokens, thinking });
+  if (parameters.reasoning_effort || parameters.enable_thinking !== undefined) {
+    log?.info?.(
+      "QODER",
+      `thinking: effort=${parameters.reasoning_effort ?? "(unset)"} source=${thinking?.source ?? "client"} enable_thinking=${parameters.enable_thinking ?? "(unset)"}${parameters.reasoning_budget_tokens ? ` budget=${parameters.reasoning_budget_tokens}` : ""}`,
+    );
+  }
+  if (qoderThinkingDisablesReasoning(parameters)) {
+    isReasoning = false;
+    // Reassign rather than mutate: the catalog entry is shared/cached.
+    modelConfig = { ...modelConfig, is_reasoning: false };
   }
 
   const lastUser = lastUserText(messages);
@@ -305,7 +365,7 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
       system: systemText,
       messages,
       tools: Array.isArray(tools) ? tools : [],
-      parameters: { max_tokens: maxTokens },
+      parameters,
       chat_context: {
         chatPrompt: "",
         imageUrls: null,

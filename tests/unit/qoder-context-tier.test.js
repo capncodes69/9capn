@@ -171,7 +171,7 @@ describe("applyQoderContextTier", () => {
 });
 
 describe("routableQoderModels", () => {
-  it("lists visible models first, then hidden (enable:false) catalog keys", () => {
+  it("prepends static fallback keys, then visible, then hidden (enable:false) catalog keys", () => {
     const catalog = {
       models: [{ id: "qmodel_38max", name: "Qwen3.8-Max" }],
       rawConfigs: new Map([
@@ -180,11 +180,26 @@ describe("routableQoderModels", () => {
         ["dmodel", { key: "dmodel", enable: false }],
       ]),
     };
+    // Sonus/Cantus are not in this catalog, so their static fallback blocks
+    // keep them advertised ahead of the live entries.
     expect(routableQoderModels(catalog)).toEqual([
+      { id: "smodel", name: "Sonus", hidden: false },
+      { id: "cmodel", name: "Cantus", hidden: false },
       { id: "qmodel_38max", name: "Qwen3.8-Max", hidden: false },
       { id: "qfmodel", name: "Qwen Fast", hidden: true },
       { id: "dmodel", name: "dmodel", hidden: true },
     ]);
+  });
+
+  it("does not duplicate a static fallback key the catalog already publishes", () => {
+    const catalog = {
+      models: [{ id: "smodel", name: "Sonus (live)" }],
+      rawConfigs: new Map([["smodel", { key: "smodel", enable: true, display_name: "Sonus (live)" }]]),
+    };
+    const ids = routableQoderModels(catalog).map((m) => m.id);
+    expect(ids.filter((id) => id === "smodel")).toHaveLength(1);
+    // The catalog entry (and its name) wins over the static block.
+    expect(routableQoderModels(catalog).find((m) => m.id === "smodel").name).toBe("Sonus (live)");
   });
 
   it("returns [] for a failed catalog fetch", () => {

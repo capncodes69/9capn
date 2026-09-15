@@ -29,6 +29,7 @@ import {
   QODER_USERINFO_URL,
   QODER_IDE_VERSION,
   QODER_CLIENT_TYPE,
+  QODER_STATIC_MODEL_CONFIGS,
 } from "../shared/qoder/constants.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -344,8 +345,9 @@ export async function resolveQoderModels(credentials, options = {}) {
 }
 
 /**
- * Every model key the chat endpoint accepts for this credential: the IDE-visible
- * models first, then catalog entries flagged `enable:false` (hidden in the IDE
+ * Every model key the chat endpoint accepts for this credential: the static
+ * fallback keys the catalog omits (Sonus/Cantus) first, then the IDE-visible
+ * models, then catalog entries flagged `enable:false` (hidden in the IDE
  * picker, e.g. by an account policy, but still served by agent_chat_generation —
  * see fetchQoderCatalogRaw). /v1/models uses this so the advertised list matches
  * what the router will actually route instead of collapsing to one or two keys.
@@ -354,6 +356,22 @@ export function routableQoderModels(catalog) {
   if (!catalog) return [];
   const out = [];
   const seen = new Set();
+
+  // Static fallback keys first (Sonus `smodel` / Cantus `cmodel`). The live
+  // catalog often omits them, yet the executor still routes them via
+  // QODER_STATIC_MODEL_CONFIGS — so they must not vanish from /v1/models just
+  // because the live catalog replaced the static provider list. Skipped when
+  // the catalog already publishes the key (the catalog entry wins).
+  const catalogKeys = new Set([
+    ...(catalog.models || []).map((m) => m?.id),
+    ...(catalog.rawConfigs ? [...catalog.rawConfigs.keys()] : []),
+  ]);
+  for (const [key, cfg] of Object.entries(QODER_STATIC_MODEL_CONFIGS)) {
+    if (!key || seen.has(key) || catalogKeys.has(key)) continue;
+    seen.add(key);
+    out.push({ id: key, name: cfg.display_name || key, hidden: false });
+  }
+
   for (const m of catalog.models || []) {
     if (!m?.id || seen.has(m.id)) continue;
     seen.add(m.id);

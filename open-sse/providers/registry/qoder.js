@@ -31,6 +31,12 @@ export default {
     { id: "performance", name: "Performance" },
     { id: "efficient", name: "Efficient" },
     { id: "lite", name: "Lite" },
+    // Frontier reasoning models. Canonical keys are smodel/cmodel; the CLI
+    // picker shows the display names. Their model_config is not always in the
+    // per-account catalog, so the executor falls back to a static block
+    // (QODER_STATIC_MODEL_CONFIGS) — they must stay listed here to be routable.
+    { id: "smodel", name: "Sonus" },
+    { id: "cmodel", name: "Cantus" },
     { id: "qmodel_38max", name: "Qwen3.8-Max" },
     { id: "qmodel_latest", name: "Qwen3.7-Max" },
     { id: "qmodel", name: "Qwen3.7-Plus" },
