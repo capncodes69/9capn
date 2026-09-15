@@ -89,3 +89,4 @@ Pre-translate hooks that compress `tool_result` content in-place to cut tokens. 
 - Security-sensitive env: `JWT_SECRET` (session cookie), `INITIAL_PASSWORD` (default `123456` — must override), `API_KEY_SECRET`, `MACHINE_ID_SALT`. Full env contract in `.env.example` and ARCHITECTURE.md's env matrix.
 - Binary/protobuf upstreams (kiro EventStream, cursor protobuf, commandcode NDJSON) don't round-trip through OpenAI — they're handled inside their own executor, not the translator.
 - Versioning: root and `cli/` are versioned independently; changes are logged in `CHANGELOG.md`. Commit style is Conventional Commits (`fix(translator): …`, `feat(...)`).
+- No provenance noise: never credit a third-party AI tool, and never name the fork this repo descends from or its owner (handle, repo path, or personal account email) in comments, docs, or commit messages. When porting a config from somewhere else, describe what the setting does rather than where it came from.
