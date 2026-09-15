@@ -40,6 +40,17 @@ function formatResetTimeDisplay(resetTime) {
 }
 
 /**
+ * Quota rows are normally counts. A row that declares a currency unit holds
+ * absolute money (CapnZed's trial credit), so render it as such instead of
+ * passing a bare number to toLocaleString().
+ */
+function formatAmount(value, unit) {
+  const amount = Number(value) || 0;
+  if (unit === "USD") return `$${amount.toFixed(2)}`;
+  return amount.toLocaleString();
+}
+
+/**
  * Get color classes based on remaining percentage
  */
 function getColorClasses(remainingPercentage) {
@@ -159,6 +170,10 @@ export default function QuotaTable({
           // and their resetAt is a hard expiry, so word it as "expires".
           const recurring = quota.recurring !== false;
           const countdownLabel = recurring ? `in ${countdown}` : `expires in ${countdown}`;
+          const usedLabel = formatAmount(quota.used, quota.unit);
+          const usageText = isUnlimited
+            ? `${usedLabel} used · Unlimited`
+            : `${usedLabel} / ${quota.total > 0 ? formatAmount(quota.total, quota.unit) : "∞"}`;
 
           return (
             <div
@@ -187,17 +202,8 @@ export default function QuotaTable({
                 )}
 
                 <div className={`flex items-center justify-between gap-1 min-w-0 ${compact ? "text-[10px]" : "text-xs"}`}>
-                  <span
-                    className="text-text-muted truncate"
-                    title={
-                      isUnlimited
-                        ? `${quota.used.toLocaleString()} used · Unlimited`
-                        : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`
-                    }
-                  >
-                    {isUnlimited
-                      ? `${quota.used.toLocaleString()} used · Unlimited`
-                      : `${quota.used.toLocaleString()} / ${quota.total > 0 ? quota.total.toLocaleString() : "∞"}`}
+                  <span className="text-text-muted truncate" title={usageText}>
+                    {usageText}
                   </span>
                   <span className={`font-medium ${isUnlimited ? "text-green-600 dark:text-green-400" : colors.text} shrink-0`}>
                     {isUnlimited ? "Unlimited" : `${quota.remaining}%`}

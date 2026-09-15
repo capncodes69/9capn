@@ -147,6 +147,79 @@ export function parseCapnZedUsage(userInfo, now = Date.now()) {
 }
 
 /**
+ * Fold this connection's locally recorded spend into a quota payload.
+ *
+ * Why a local ledger at all: Zed reports the trial as a $-credit but exposes no
+ * balance endpoint, so the only spend signal 9capn can show is what it recorded
+ * itself (usageHistory rows for provider `capnzed`, priced at write time from
+ * open-sse/providers/pricing.js). That is an ESTIMATE at public list prices —
+ * Zed's own meter is authoritative — hence the "(est.)" label and the caveat in
+ * the card message.
+ *
+ * Pure: takes the spend snapshot as an argument so it can be unit-tested without
+ * a database or a live account.
+ *
+ * @param {object|null} usage            payload from parseCapnZedUsage()
+ * @param {object|null} spend            { costUsd, requests, firstAt, lastAt }
+ * @returns {object|null} a new payload (never mutates the input)
+ */
+export function applyCapnZedSpend(usage, spend) {
+  if (!usage || typeof usage !== "object") return usage;
+  // A refusal/error payload carries only a message — nothing to meter.
+  if (!usage.quotas || typeof usage.quotas !== "object") return usage;
+
+  const spent = Math.max(0, toFiniteNumber(spend?.costUsd, 0));
+  const requests = Math.max(0, Math.round(toFiniteNumber(spend?.requests, 0)));
+  const isTrial = usage.planId === "zed_pro_trial";
+  const quotas = { ...usage.quotas };
+  const notes = [];
+
+  if (isTrial && spend) {
+    const credit = CAPNZED_TRIAL_CREDIT_USD;
+    const remainingUsd = Math.max(0, credit - spent);
+    quotas["Trial Credit (est.)"] = {
+      used: roundUsd(spent),
+      total: credit,
+      // Absolute dollars, so the row declares its unit — the table renders USD
+      // with a $ prefix instead of a raw count.
+      unit: "USD",
+      remainingPercentage: credit > 0 ? (remainingUsd / credit) * 100 : 0,
+      // A trial credit never refills: the window closes once. "expires in".
+      recurring: false,
+      resetAt: usage.trialEndsAtMs ? new Date(usage.trialEndsAtMs).toISOString() : null,
+      unlimited: false,
+    };
+    notes.push(
+      `Local estimate: ${requests} request${requests === 1 ? "" : "s"} · ${formatUsd(spent)} of ` +
+        `${formatUsd(credit)} trial credit used (list prices; Zed's own meter decides).`,
+    );
+    if (spent > credit) {
+      notes.push("Estimated spend is past the trial credit — the account is parked until the window closes.");
+    }
+  } else if (spend && requests > 0) {
+    // Paid plan (or unknown): no credit to draw a bar against, so report the
+    // window's spend as text instead of a fake 0/0 row.
+    notes.push(
+      `Local estimate for this period: ${requests} request${requests === 1 ? "" : "s"} · ${formatUsd(spent)}.`,
+    );
+  }
+
+  return {
+    ...usage,
+    quotas,
+    message: [usage.message, ...notes].filter(Boolean).join(" "),
+  };
+}
+
+function roundUsd(value) {
+  return Math.round(value * 100) / 100;
+}
+
+function formatUsd(value) {
+  return `$${(Math.round(value * 100) / 100).toFixed(2)}`;
+}
+
+/**
  * @param {string|null|undefined} accessToken
  * @param {object|null|undefined} providerSpecificData
  * @param {object|null|undefined} proxyOptions

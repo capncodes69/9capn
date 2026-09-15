@@ -2,7 +2,10 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
+import { getProviderSpend } from "@/lib/usageDb";
 import { getUsageForProvider } from "open-sse/services/usage.js";
+import { applyCapnZedSpend } from "open-sse/services/usage/capnzed.js";
+import { CAPNZED_PROVIDER_ID } from "open-sse/shared/capnzedAuth.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { USAGE_APIKEY_PROVIDERS } from "@/shared/constants/providers";
@@ -117,6 +120,25 @@ export async function refreshAndUpdateCredentials(connection, force = false, pro
 }
 
 /**
+ * CapnZed shows a dollar allowance (Zed's trial credit) but the provider exposes
+ * no balance endpoint, so the only spend signal is 9capn's own ledger. Window the
+ * sum to the trial so a long-lived connection's older history can't leak into a
+ * fresh trial's meter. Estimation only — see applyCapnZedSpend.
+ */
+async function withCapnZedLocalSpend(connection, usage) {
+  if (!usage || typeof usage !== "object") return usage;
+
+  const windowStartMs = usage.trialStartedAtMs ?? usage.periodStartedAtMs ?? null;
+  const spend = await getProviderSpend({
+    provider: CAPNZED_PROVIDER_ID,
+    connectionId: connection.id,
+    since: windowStartMs ? new Date(windowStartMs) : null,
+  });
+
+  return applyCapnZedSpend(usage, spend);
+}
+
+/**
  * GET /api/usage/[connectionId] - Get usage data for a specific connection
  */
 export async function GET(request, { params }) {
@@ -181,6 +203,10 @@ export async function GET(request, { params }) {
       } catch (retryError) {
         console.warn(`[Usage] ${connection.provider}: force refresh failed: ${retryError.message}`);
       }
+    }
+
+    if (connection.provider === CAPNZED_PROVIDER_ID) {
+      usage = await withCapnZedLocalSpend(connection, usage);
     }
 
     return Response.json(usage);

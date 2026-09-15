@@ -666,6 +666,28 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
+      case "capnzed":
+        // Trial meter: an absolute $-credit (unit "USD") plus a day-window row.
+        // Both carry an explicit remainingPercentage — a spend meter runs the
+        // opposite direction to a request counter (same reason as Vercel's
+        // balance row) — and the credit is one-shot, so forward recurring:false
+        // to word resetAt as "expires in".
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              remainingPercentage: quota.remainingPercentage,
+              unit: quota.unit,
+              unlimited: quota.unlimited,
+              recurring: quota.recurring !== false,
+            });
+          });
+        }
+        break;
+
       case "zed":
         // Edit predictions + optional hosted model_requests; unlimited uses remainingPercentage.
         if (data.quotas) {

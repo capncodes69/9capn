@@ -343,6 +343,60 @@ function loadDaysInRange(adapter, maxDays) {
   return adapter.all(`SELECT dateKey, data FROM usageDaily WHERE dateKey >= ?`, [cutoffKey]);
 }
 
+/**
+ * Sum what a provider's own requests have cost, from the local ledger.
+ *
+ * Exists for providers that meter you in dollars but expose no balance endpoint
+ * (CapnZed's Zed trial is a fixed $-credit): the recorded `cost` column is the
+ * only signal available. `cost` is priced at write time from
+ * open-sse/providers/pricing.js, so treat the result as an estimate.
+ *
+ * @param {{ provider?: string, connectionId?: string|null, since?: string|Date|number|null }} filter
+ * @returns {Promise<{costUsd:number, requests:number, firstAt:string|null, lastAt:string|null}>}
+ */
+export async function getProviderSpend(filter = {}) {
+  const empty = { costUsd: 0, requests: 0, firstAt: null, lastAt: null };
+  const provider = filter.provider;
+  if (!provider) return empty;
+
+  try {
+    const db = await getAdapter();
+    const conds = ["COALESCE(provider, '') = ?"];
+    const params = [provider];
+
+    if (filter.connectionId) {
+      conds.push("COALESCE(connectionId, '') = ?");
+      params.push(filter.connectionId);
+    }
+    if (filter.since) {
+      conds.push("timestamp >= ?");
+      params.push(new Date(filter.since).toISOString());
+    }
+
+    const row = db.get(
+      `SELECT COALESCE(SUM(cost), 0) AS cost, COUNT(*) AS requests,
+              MIN(timestamp) AS firstAt, MAX(timestamp) AS lastAt
+         FROM usageHistory WHERE ${conds.join(" AND ")}`,
+      params
+    );
+
+    return {
+      costUsd: toFiniteNumber(row?.cost),
+      requests: Math.max(0, Math.trunc(toFiniteNumber(row?.requests))),
+      firstAt: row?.firstAt || null,
+      lastAt: row?.lastAt || null,
+    };
+  } catch (error) {
+    console.warn(`[Usage] provider spend lookup failed for ${provider}: ${error.message}`);
+    return empty;
+  }
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
 export async function getUsageStats(period = "all") {
   const db = await getAdapter();
 
