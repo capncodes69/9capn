@@ -295,14 +295,46 @@ describe("RSA native-app flow", () => {
       format: "der",
       type: "pkcs1",
     });
+    const plaintext = "legacy-token-0123456789abcdef";
     const encrypted = crypto.publicEncrypt(
       { key: publicKey, padding: crypto.constants.RSA_PKCS1_PADDING },
-      Buffer.from("legacy-token", "utf8"),
+      Buffer.from(plaintext, "utf8"),
     );
 
     expect(
       decryptCapnZedAccessToken(encrypted.toString("base64url"), auth.privateKeyVerifier),
-    ).toBe("legacy-token");
+    ).toBe(plaintext);
+  });
+
+  // OpenSSL 3 implements implicit rejection for PKCS#1 v1.5, so a wrong-key or
+  // truncated ciphertext returns random bytes instead of throwing. Without the
+  // stdout/printable guard the caller would save that garbage as a connection and
+  // only find out at the first request (401 / plan gate).
+  it("rejects a ciphertext that was never produced by Zed", () => {
+    const auth = createCapnZedNativeAuthData({}, { nativeAppPort: 1 });
+    const garbage = Buffer.from("not-a-real-ciphertext", "utf8").toString("base64url");
+
+    expect(() => decryptCapnZedAccessToken(garbage, auth.privateKeyVerifier)).toThrow(
+      /Failed to decrypt CapnZed access token/,
+    );
+  });
+
+  it("rejects a token encrypted against a different keypair", () => {
+    const mine = createCapnZedNativeAuthData({}, { nativeAppPort: 1 });
+    const theirs = createCapnZedNativeAuthData({}, { nativeAppPort: 2 });
+    const theirPublicKey = crypto.createPublicKey({
+      key: Buffer.from(theirs.publicKey, "base64url"),
+      format: "der",
+      type: "pkcs1",
+    });
+    const encrypted = crypto.publicEncrypt(
+      { key: theirPublicKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+      Buffer.from("someone-elses-access-token", "utf8"),
+    );
+
+    expect(() =>
+      decryptCapnZedAccessToken(encrypted.toString("base64url"), mine.privateKeyVerifier),
+    ).toThrow(/Failed to decrypt CapnZed access token/);
   });
 
   it("rejects a verifier that is not a CapnZed private key", () => {

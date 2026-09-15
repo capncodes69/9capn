@@ -269,30 +269,55 @@ export function parseCapnZedCallbackPayload(input) {
   return { userId: String(userId), encryptedAccessToken: String(encryptedAccessToken) };
 }
 
+/**
+ * An access token travels in an HTTP header, so it must be a printable, non-empty
+ * string. This guard is what keeps a FAILED decryption from looking like a success:
+ * OpenSSL 3 implements implicit rejection for PKCS#1 v1.5, so a wrong-key or
+ * corrupted ciphertext returns random bytes instead of throwing. Without the check
+ * we would happily save a garbage token as a connection, and the account would only
+ * fail later (401 / plan gate) with a message that points nowhere.
+ */
+function looksLikeAccessToken(value) {
+  if (typeof value !== "string" || value.length < 16 || value.length > 8192) return false;
+  if (!/^[\x20-\x7e]+$/.test(value)) return false;
+  return value === value.trim();
+}
+
 /** Decrypt the RSA-encrypted access token with the private key that never left the host. */
 export function decryptCapnZedAccessToken(encryptedAccessToken, privateKeyVerifier) {
   const privateKey = decodeCapnZedPrivateKeyVerifier(privateKeyVerifier);
   const encrypted = Buffer.from(String(encryptedAccessToken), "base64url");
+  let oaepError = null;
   try {
-    return crypto
+    const token = crypto
       .privateDecrypt(
         { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
         encrypted,
       )
       .toString("utf8");
-  } catch (oaepError) {
-    try {
-      return crypto
-        .privateDecrypt(
-          { key: privateKey, padding: crypto.constants.RSA_PKCS1_PADDING },
-          encrypted,
-        )
-        .toString("utf8");
-    } catch {
-      const message = oaepError instanceof Error ? oaepError.message : String(oaepError);
-      throw new Error(`Failed to decrypt CapnZed access token: ${message}`);
-    }
+    if (looksLikeAccessToken(token)) return token;
+    oaepError = new Error("OAEP decryption did not yield a token");
+  } catch (error) {
+    oaepError = error;
   }
+
+  try {
+    const token = crypto
+      .privateDecrypt(
+        { key: privateKey, padding: crypto.constants.RSA_PKCS1_PADDING },
+        encrypted,
+      )
+      .toString("utf8");
+    if (looksLikeAccessToken(token)) return token;
+  } catch {
+    /* fall through to the original error below */
+  }
+
+  const message = oaepError instanceof Error ? oaepError.message : String(oaepError);
+  throw new Error(
+    `Failed to decrypt CapnZed access token: ${message}. The callback URL must come from the ` +
+      "same login attempt that produced the keypair (restart the flow and paste a fresh URL).",
+  );
 }
 
 // ───────────────────────────── account auth ─────────────────────────────
