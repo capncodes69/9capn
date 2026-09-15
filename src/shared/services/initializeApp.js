@@ -118,6 +118,12 @@ async function runHeavyStartup() {
   import("@/sse/services/backgroundTokenRefresh.js")
     .then(({ startBackgroundTokenRefresh }) => startBackgroundTokenRefresh())
     .catch((e) => console.log("[BackgroundTokenRefresh] scheduler start failed:", e.message));
+
+  // Prune engine-layer in-memory state (freebuff sessions + expired cooldowns)
+  // so a long-running server never accumulates stale entries.
+  import("@/lib/network/stateSweeper.js")
+    .then(({ startStateSweeper }) => startStateSweeper())
+    .catch((e) => console.log("[StateSweeper] scheduler start failed:", e.message));
 }
 
 function hasQuotaAutoPingEnabled(settings) {
