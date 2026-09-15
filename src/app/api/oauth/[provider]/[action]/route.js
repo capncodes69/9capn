@@ -321,7 +321,7 @@ export async function POST(request, { params }) {
       if (provider === "trae") ok = registerTraeSession({ state });
       else if (provider === "windsurf") ok = registerWindsurfSession({ state });
       else if (isZedFamily(provider)) ok = registerZedSession({ state, codeVerifier: body?.codeVerifier, provider });
-      else return NextResponse.json({ error: "register-session only supported for trae/windsurf/zed" }, { status: 400 });
+      else return NextResponse.json({ error: "register-session only supported for trae/windsurf/zed/capnzed" }, { status: 400 });
       return NextResponse.json({ success: ok });
     }
 
@@ -386,6 +386,54 @@ export async function POST(request, { params }) {
         } catch (err) {
           clearXiaomiMimoSession(state);
           stopXiaomiMimoProxy();
+          return NextResponse.json({ error: err.message }, { status: 500 });
+        }
+      }
+
+      // Zed/CapnZed: RSA native-app callback. Unlike the browser flow (where the
+      // local proxy in utils/server.js exchanges the callback itself), this is the
+      // manual-paste path — and it is the ONLY path that works when 9router runs
+      // remotely, because the browser cannot reach the server's 127.0.0.1 listener.
+      // The RSA private key is not resent: it already lives in the session
+      // registered by /register-session (or in the proxy's own state), which is
+      // exactly what the auto path passes to exchangeTokens.
+      if (isZedFamily(provider)) {
+        if (!state) {
+          return NextResponse.json({ error: "Missing state" }, { status: 400 });
+        }
+        if (!code) {
+          return NextResponse.json({ error: "Missing callback URL" }, { status: 400 });
+        }
+        const session = getZedSessionStatus(state, provider);
+        const verifier = codeVerifier || session?.codeVerifier;
+        if (!verifier) {
+          return NextResponse.json(
+            { error: "OAuth session not found; restart the login flow and paste the callback URL again" },
+            { status: 400 },
+          );
+        }
+        try {
+          // redirectUri is unused by the Zed flow — only the callback + RSA key matter.
+          const tokenData = await exchangeTokens(provider, code, null, verifier, state);
+          const connection = await createProviderConnection({
+            provider,
+            authType: "oauth",
+            ...tokenData,
+            expiresAt: null,
+            testStatus: "active",
+          });
+          clearZedSession(state);
+          stopZedProxy();
+          return NextResponse.json({
+            success: true,
+            connection: {
+              id: connection.id,
+              provider: connection.provider,
+              email: connection.email,
+              displayName: connection.displayName,
+            },
+          });
+        } catch (err) {
           return NextResponse.json({ error: err.message }, { status: 500 });
         }
       }

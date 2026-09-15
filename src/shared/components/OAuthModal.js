@@ -9,6 +9,16 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 // Browser OAuth: popup → auto callback → auto exchange → poll-status.
 const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf", "zed", "capnzed"]);
 
+// Providers whose callback listener is torn down with /stop-proxy (every proxy
+// OAuth family). Closed on modal close so a stale listener never survives a
+// cancelled login.
+const STOP_PROXY_PROVIDERS = new Set(["codex", "xai", "trae", "windsurf", "zed", "capnzed"]);
+
+// Zed's RSA native-app flow: the callback is a 127.0.0.1 URL carrying
+// user_id + access_token, so it can only be auto-consumed when 9router runs on
+// the same machine as the browser.
+const ZED_FAMILY_PROVIDERS = new Set(["zed", "capnzed"]);
+
 // Providers offering a paste-token fallback (import-token flow).
 // UX warns if the IDE (which issues the token) is not installed.
 const PASTE_TOKEN_PROVIDERS = {
@@ -427,16 +437,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       // Abort polling and cleanup proxy when modal closes
       pollingAbortRef.current = true;
       openedRef.current = false;
-      if (provider === "codex") {
-        fetch("/api/oauth/codex/stop-proxy").catch(() => {});
-      } else if (provider === "xai") {
-        fetch("/api/oauth/xai/stop-proxy").catch(() => {});
-      } else if (provider === "trae") {
-        fetch("/api/oauth/trae/stop-proxy").catch(() => {});
-      } else if (provider === "windsurf") {
-        fetch("/api/oauth/windsurf/stop-proxy").catch(() => {});
-      } else if (provider === "zed") {
-        fetch("/api/oauth/zed/stop-proxy").catch(() => {});
+      if (STOP_PROXY_PROVIDERS.has(provider)) {
+        fetch(`/api/oauth/${provider}/stop-proxy`).catch(() => {});
       }
     }
   }, [isOpen, provider, startOAuthFlow]);
@@ -601,7 +603,14 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         const res = await fetch(`/api/oauth/${provider}/exchange`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: input, state: authData?.state }),
+          body: JSON.stringify({
+            code: input,
+            state: authData?.state,
+            // zed/capnzed: the RSA private key is normally resolved from the
+            // registered session server-side; sending it as well keeps a paste
+            // working if that single-slot session was evicted in the meantime.
+            ...(authData?.codeVerifier ? { codeVerifier: authData.codeVerifier } : {}),
+          }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
@@ -655,16 +664,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
   // Clear session on modal close + cleanup proxy
   const handleClose = useCallback(() => {
-    if (provider === "codex") {
-      fetch("/api/oauth/codex/stop-proxy").catch(() => {});
-    } else if (provider === "xai") {
-      fetch("/api/oauth/xai/stop-proxy").catch(() => {});
-    } else if (provider === "trae") {
-      fetch("/api/oauth/trae/stop-proxy").catch(() => {});
-    } else if (provider === "windsurf") {
-      fetch("/api/oauth/windsurf/stop-proxy").catch(() => {});
-    } else if (provider === "zed") {
-      fetch("/api/oauth/zed/stop-proxy").catch(() => {});
+    if (STOP_PROXY_PROVIDERS.has(provider)) {
+      fetch(`/api/oauth/${provider}/stop-proxy`).catch(() => {});
     }
     onClose();
   }, [onClose, provider]);
@@ -683,25 +684,30 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
       <div className="flex flex-col gap-4">
-        {/* Trae/Windsurf: browser OAuth (proxy) + paste-token fallback */}
+        {/* Trae/Windsurf: browser OAuth (proxy) + paste-token fallback.
+            zed/capnzed: browser OAuth (proxy) + callback-URL paste — they have no
+            token to paste, only the RSA callback the local listener would have
+            consumed. */}
         {PROXY_OAUTH_PROVIDERS.has(provider) && (step === "waiting" || step === "input" || step === "error") && (
           <>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => { setAuthMode("browser"); setError(null); setStep("waiting"); startOAuthFlow(); }}
-                className={`flex-1 rounded-lg border px-3 py-2 text-sm transition-colors ${authMode === "browser" ? "border-primary bg-primary/10 text-primary" : "border-border text-text-muted hover:text-primary"}`}
-              >
-                🌐 Sign in with browser
-              </button>
-              <button
-                type="button"
-                onClick={() => { setAuthMode("paste-token"); setError(null); setStep("input"); }}
-                className={`flex-1 rounded-lg border px-3 py-2 text-sm transition-colors ${authMode === "paste-token" ? "border-primary bg-primary/10 text-primary" : "border-border text-text-muted hover:text-primary"}`}
-              >
-                🔑 Paste token
-              </button>
-            </div>
+            {PASTE_TOKEN_PROVIDERS[provider] && (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode("browser"); setError(null); setStep("waiting"); startOAuthFlow(); }}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm transition-colors ${authMode === "browser" ? "border-primary bg-primary/10 text-primary" : "border-border text-text-muted hover:text-primary"}`}
+                >
+                  🌐 Sign in with browser
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode("paste-token"); setError(null); setStep("input"); }}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm transition-colors ${authMode === "paste-token" ? "border-primary bg-primary/10 text-primary" : "border-border text-text-muted hover:text-primary"}`}
+                >
+                  🔑 Paste token
+                </button>
+              </div>
+            )}
 
             {authMode === "browser" && (
               <>
@@ -711,27 +717,54 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                     <span className="text-sm">Waiting for browser authorization…</span>
                   </div>
                 )}
-                {step === "input" && (
-                  <div className="space-y-3">
-                    <p className="text-sm text-text-muted">
-                      Popup was blocked. After authorizing in the browser, paste the full callback URL here:
-                    </p>
-                    <Input
-                      value={callbackUrl}
-                      onChange={(e) => setCallbackUrl(e.target.value)}
-                      placeholder="http://127.0.0.1:.../callback?..."
-                      className="font-mono text-xs"
-                    />
+                {/* zed/capnzed only: the sign-in URL is worth showing because the
+                    popup is unusable when 9router runs anywhere but this machine. */}
+                {ZED_FAMILY_PROVIDERS.has(provider) && authData?.authUrl && (
+                  <div>
+                    <p className="text-sm font-medium mb-2">Step 1: open this sign-in URL in your browser</p>
                     <div className="flex gap-2">
-                      <Button onClick={handleManualSubmit} fullWidth disabled={!callbackUrl}>Connect</Button>
-                      <Button onClick={handleClose} variant="ghost" fullWidth>Cancel</Button>
+                      <Input value={authData.authUrl} readOnly className="flex-1 font-mono text-xs" />
+                      <Button
+                        variant="secondary"
+                        icon={copied === "zed_auth_url" ? "check" : "content_copy"}
+                        onClick={() => copy(authData.authUrl, "zed_auth_url")}
+                      >
+                        Copy
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        icon="open_in_new"
+                        onClick={() => window.open(authData.authUrl, "_blank", "noopener,noreferrer")}
+                      >
+                        Open
+                      </Button>
                     </div>
                   </div>
                 )}
+
+                <div className="space-y-3">
+                  <p className="text-sm text-text-muted">
+                    {ZED_FAMILY_PROVIDERS.has(provider)
+                      ? "Step 2: Zed then sends the browser to a 127.0.0.1 callback. That page only loads when 9router runs on this machine; when it runs remotely it fails to load (expected). Either way, copy the full address from the browser's address bar — query string included — and paste it here:"
+                      : "Popup was blocked. After authorizing in the browser, paste the full callback URL here:"}
+                  </p>
+                  <Input
+                    value={callbackUrl}
+                    onChange={(e) => setCallbackUrl(e.target.value)}
+                    placeholder={ZED_FAMILY_PROVIDERS.has(provider)
+                      ? "http://127.0.0.1:12345/?user_id=...&access_token=..."
+                      : "http://127.0.0.1:.../callback?..."}
+                    className="font-mono text-xs"
+                  />
+                  <div className="flex gap-2">
+                    <Button onClick={handleManualSubmit} fullWidth disabled={!callbackUrl}>Connect</Button>
+                    <Button onClick={handleClose} variant="ghost" fullWidth>Cancel</Button>
+                  </div>
+                </div>
               </>
             )}
 
-            {authMode === "paste-token" && (
+            {authMode === "paste-token" && PASTE_TOKEN_PROVIDERS[provider] && (
               <div className="space-y-3">
                 {ideStatus && !ideStatus.installed && (
                   <div className={`px-3 py-2 rounded-lg text-sm ${PASTE_TOKEN_PROVIDERS[provider].ideOptional ? "bg-blue-500/10 text-blue-700 dark:text-blue-300" : "bg-yellow-500/10 text-yellow-700 dark:text-yellow-300"}`}>
