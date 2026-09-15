@@ -1,0 +1,38 @@
+# fly.9capn.toml — 9Router deployment on Fly.io (account: fathcodes69@gmail.com)
+# Deploy with: fly deploy --config fly.9capn.toml
+# See https://fly.io/docs/reference/configuration/ for reference.
+
+app = '9capn'
+primary_region = 'sin'
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = 'production'
+  PORT = '20128'
+  HOSTNAME = '0.0.0.0'
+  NEXT_TELEMETRY_DISABLED = '1'
+  DATA_DIR = '/app/data'
+
+[http_service]
+  internal_port = 20128
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 250
+    soft_limit = 200
+
+[[vm]]
+  memory = '8192mb'
+  cpu_kind = 'performance'
+  cpus = 4
+
+[mounts]
+  source = '9capn_data'
+  destination = '/app/data'
