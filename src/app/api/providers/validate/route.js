@@ -5,6 +5,7 @@ import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
+import { describeCamberKeyProblem, fetchCamberMe } from "open-sse/shared/camberAuth.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
@@ -589,6 +590,33 @@ export async function POST(request) {
             const resolved = await resolveQoderCredentials({ apiKey, providerSpecificData }, null, AbortSignal.timeout(8000));
             const result = await resolveQoderModels(resolved, { forceRefresh: true });
             isValid = !!result?.models?.length;
+          } catch (err) {
+            isValid = false;
+            error = err.message;
+          }
+          break;
+        }
+
+        case "camber": {
+          // GET /api/cli/me is the identity call the official CLI makes, so it is
+          // the cheapest true validation — a rejected key answers 401.
+          //
+          // Check the paste BEFORE probing: a sign-in URL or a copied JSON blob
+          // earns only "user not found" upstream, which reads like a wrong-account
+          // problem rather than a paste mistake.
+          const camberKeyProblem = describeCamberKeyProblem(apiKey);
+          if (camberKeyProblem) {
+            isValid = false;
+            error = camberKeyProblem;
+            break;
+          }
+          try {
+            const me = await fetchCamberMe(
+              { apiKey, providerSpecificData },
+              { signal: AbortSignal.timeout(10000) },
+            );
+            isValid = !!me?.user_id;
+            if (!isValid) error = "Camber did not return an account for this key";
           } catch (err) {
             isValid = false;
             error = err.message;

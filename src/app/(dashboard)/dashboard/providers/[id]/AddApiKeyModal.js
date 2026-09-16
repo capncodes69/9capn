@@ -20,6 +20,10 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
   const isAzure = provider === "azure";
   const isCloudflareAi = provider === "cloudflare-ai";
+  // Camber is an agent platform: the key is an API credential and the AGENT is
+  // what the conversation actually runs. It has no catalog endpoint, so the
+  // agent cannot be a dropdown — it is a free-text alias defaulting to nova.cli.
+  const isCamber = provider === "camber";
   const providerRegions = AI_PROVIDERS?.[provider]?.regions || null;
   const defaultRegion = AI_PROVIDERS?.[provider]?.defaultRegion || providerRegions?.[0]?.id || "";
 
@@ -38,6 +42,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     organization: "",
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
+  const [camberAgent, setCamberAgent] = useState("nova.cli");
   const [region, setRegion] = useState(defaultRegion);
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
@@ -66,6 +71,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     }
     if (isCloudflareAi) {
       return { accountId: cloudflareData.accountId };
+    }
+    if (isCamber) {
+      return { camberAgent: (camberAgent || "nova.cli").trim().replace(/^@/, "") || "nova.cli" };
     }
     if (providerRegions && region) {
       return { region };
@@ -317,6 +325,26 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           <p className="text-xs text-text-muted">
             Enter the model ID exactly as your compatible endpoint expects it. This model will be saved as the connection default.
           </p>
+        )}
+        {isCamber && (
+          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
+            <h3 className="font-semibold mb-3 text-sm">Camber Agent</h3>
+            <Input
+              label="Agent"
+              value={camberAgent}
+              onChange={(e) => setCamberAgent(e.target.value)}
+              placeholder="nova.cli"
+            />
+            <p className="text-xs text-text-muted mt-2">
+              Every Camber conversation runs through an agent. Use the alias from the
+              platform (e.g. <code>nova.cli</code>, <code>yourname.my_agent</code>) without the
+              leading <code>@</code>. Defaults to <code>nova.cli</code>.
+            </p>
+            <p className="text-xs text-text-muted mt-2">
+              The API key is the token <code>camber login</code> prints, or the one in
+              your Camber account settings.
+            </p>
+          </div>
         )}
         {isCloudflareAi && (
           <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
