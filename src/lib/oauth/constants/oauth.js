@@ -224,6 +224,18 @@ export const CAPNZED_HOSTED_CONFIG = {
   oauthTimeoutMs: 600_000,
 };
 
+// Camber — browser login via the platform's own CLI auth endpoints (device-flow
+// shaped, no PKCE and no client secret). The user authorises on the web page and
+// we poll /auth/poll until the API key comes back. Hosts default here so the
+// config still resolves if the registry entry is unavailable.
+export const CAMBER_CONFIG = {
+  apiBaseUrl: "https://api-v2.cambercloud.com/api/cli",
+  webBaseUrl: "https://app.cambercloud.com",
+  loginPath: "/auth-cli",
+  pollIntervalSeconds: 5,
+  ...PROVIDER_OAUTH["camber"],
+};
+
 // OAuth timeout (5 minutes)
 export const OAUTH_TIMEOUT = 300000;
 

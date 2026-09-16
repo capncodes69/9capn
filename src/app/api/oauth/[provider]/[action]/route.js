@@ -275,6 +275,8 @@ export async function GET(request, { params }) {
         "qoder",
         "grok-cli",
         "freebuff",
+        // Camber rolls its own session id (/auth/initiate) and needs no PKCE.
+        "camber",
       ];
       let deviceData;
       if (noPkceDeviceProviders.includes(provider)) {
@@ -567,6 +569,10 @@ export async function POST(request, { params }) {
           return NextResponse.json({ error: "Missing code verifier" }, { status: 400 });
         }
         result = await pollForToken(provider, deviceCode, codeVerifier, extraData);
+      } else if (provider === "camber") {
+        // Camber identifies the session by the id /auth/initiate returned, so no
+        // verifier is involved.
+        result = await pollForToken(provider, deviceCode, null, extraData);
       } else {
         // Qwen and other PKCE providers
         if (!codeVerifier) {

@@ -28,6 +28,7 @@ import trae from "./trae.js";
 import windsurf from "./windsurf.js";
 import zed from "./zed.js";
 import capnzed from "./capnzed.js";
+import camber from "./camber.js";
 
 // Provider configurations
 const PROVIDERS = {
@@ -55,6 +56,7 @@ const PROVIDERS = {
   windsurf,
   zed,
   capnzed,
+  camber,
 };
 
 export { PROVIDERS };

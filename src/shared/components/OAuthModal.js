@@ -245,6 +245,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         "qoder",
         "grok-cli",
         "freebuff",
+        // Camber: session id from /auth/initiate, no user code to type — the
+        // login URL is opened and the poll does the rest (qoder-shaped panel).
+        "camber",
       ];
       if (deviceCodeProviders.includes(provider)) {
         setIsDeviceCode(true);
@@ -884,18 +887,22 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                   </Button>
                 </div>
               </div>
-              <div className="bg-primary/10 p-4 rounded-lg">
-                <p className="text-xs text-text-muted mb-1">Your Code</p>
-                <div className="flex items-center justify-center gap-2">
-                  <p className="text-2xl font-mono font-bold text-primary">{deviceData.user_code}</p>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    icon={copied === "user_code" ? "check" : "content_copy"}
-                    onClick={() => copy(deviceData.user_code, "user_code")}
-                  />
+              {/* Providers with no user code (camber — authorisation happens on the
+                  page itself; codebuddy) must not render an empty box. */}
+              {deviceData.user_code && (
+                <div className="bg-primary/10 p-4 rounded-lg">
+                  <p className="text-xs text-text-muted mb-1">Your Code</p>
+                  <div className="flex items-center justify-center gap-2">
+                    <p className="text-2xl font-mono font-bold text-primary">{deviceData.user_code}</p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={copied === "user_code" ? "check" : "content_copy"}
+                      onClick={() => copy(deviceData.user_code, "user_code")}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
             {polling && (
               <div className="flex items-center justify-center gap-2 text-sm text-text-muted">
