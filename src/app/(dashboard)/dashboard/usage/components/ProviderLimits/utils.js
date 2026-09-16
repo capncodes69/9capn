@@ -688,6 +688,27 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
+      case "camber":
+        // One row, and only when a limit is configured: 9capn's own request
+        // count (one request = one LLM message, Camber's unit) against the plan
+        // grant. The generic fallback drops remainingPercentage, and a monthly
+        // grant refills, so recurring stays true unless the window is pinned.
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              remainingPercentage: quota.remainingPercentage,
+              unit: quota.unit,
+              unlimited: quota.unlimited,
+              recurring: quota.recurring !== false,
+            });
+          });
+        }
+        break;
+
       case "zed":
         // Edit predictions + optional hosted model_requests; unlimited uses remainingPercentage.
         if (data.quotas) {

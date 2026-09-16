@@ -79,6 +79,19 @@ describe("Camber is wired end to end", () => {
     expect(entry.hasOAuth).toBe(true);
   });
 
+  it("ships the provider icon at the path the dashboard resolves", () => {
+    // ProviderIcon builds /providers/{id}.png, and a miss falls back to the
+    // text badge for the whole session — so the file has to exist and be real.
+    const icon = resolve(ROOT, "public/providers/camber.png");
+    expect(existsSync(icon)).toBe(true);
+    const head = readFileSync(icon).subarray(0, 8);
+    expect([...head.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]); // PNG magic
+    // Inline PNG IHDR: width/height at bytes 16-23.
+    const view = readFileSync(icon);
+    expect(view.readUInt32BE(16)).toBe(128);
+    expect(view.readUInt32BE(20)).toBe(128);
+  });
+
   it("ships the Bedrock catalog as the static floor, with passthrough on", async () => {
     const entry = REGISTRY.find((r) => r.id === "camber");
     const { CAMBER_MODELS } = await import("open-sse/shared/camberCatalog.js");
@@ -306,7 +319,37 @@ describe("Camber usage reports identity, never a fabricated quota", () => {
     });
     expect(usage.message).toContain("Agent: reze.my_agent");
     expect(usage.message).toContain("Selected team: habibateam");
-    expect(usage.message).toMatch(/no quota or credit API/i);
+    // The card must NOT claim Camber has no usage API — it has one, scoped to
+    // the web session. Getting this wrong sends the user looking for a meter
+    // that does exist.
+    expect(usage.message).not.toMatch(/no quota or credit API/i);
+    expect(usage.message).toMatch(/scoped to the web\s+session/i);
+  });
+
+  it("merges the local message count in the usage route, for camber only", () => {
+    const route = source("src/app/api/usage/[connectionId]/route.js");
+    expect(route).toContain("applyCamberMessageCount");
+    expect(route).toContain("CAMBER_PROVIDER_ID");
+    // The merge must be gated: another provider's payload has no window/limit.
+    expect(route).toMatch(/connection\.provider === CAMBER_PROVIDER_ID/);
+  });
+
+  it("registers a camber branch in the dashboard quota parser", () => {
+    // Without an explicit case the generic fallback drops remainingPercentage,
+    // so the row would render as a bare count with no bar.
+    const utils = source("src/app/(dashboard)/dashboard/usage/components/ProviderLimits/utils.js");
+    expect(utils).toContain('case "camber"');
+    expect(utils).toMatch(/case "camber":[\s\S]{0,700}remainingPercentage: quota\.remainingPercentage/);
+  });
+
+  it("lets the connection set the plan and limit the meter uses", () => {
+    const modal = source("src/app/(dashboard)/dashboard/providers/[id]/AddApiKeyModal.js");
+    expect(modal).toContain("CAMBER_PLAN_LIMITS");
+    for (const key of ["camberPlan", "camberMessageLimit", "camberPeriodStart"]) {
+      expect(modal).toContain(key);
+    }
+    // Client component: the catalog is fine, the wire layer is not (asserted above).
+    expect(modal).toContain('from "open-sse/shared/camberCatalog.js"');
   });
 
   it("falls back to the default agent and skips team chatter when unknown", () => {

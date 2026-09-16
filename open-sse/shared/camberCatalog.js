@@ -42,6 +42,42 @@ export const CAMBER_MODELS = [
   { id: "claude-opus-4-6", wire: "bedrock:claude-opus-4-6-v1", name: "Claude Opus 4.6" },
 ];
 
+/**
+ * The usage API the web app reads, and why a connection cannot.
+ *
+ * `app.cambercloud.com/personal-usage` renders four resources — the ids come
+ * back from this endpoint, verified in the web bundle (`personal-usage` chunk):
+ *
+ *   GET https://api-v2.cambercloud.com/api/credit-usage/me
+ *   → { data: [ { resource: "cpu_seconds" | "gpu_seconds" | "llm_messages" | "storage_gb" }, … ] }
+ *
+ * It is scoped to the **web session**: probing it with a CLI API key (or with no
+ * token at all) answers `401 unauthorized - invalid token`, while the same key
+ * reads `/api/cli/me` fine. Both credentials a 9capn connection can hold — the
+ * pasted key and the one the browser login issues — are CLI-scoped, so this
+ * endpoint is not reachable from a provider. Do not add it to a fetcher; the
+ * card says where the real numbers live instead.
+ */
+export const CAMBER_WEB_USAGE_PATH = "/api/credit-usage/me";
+export const CAMBER_WEB_USAGE_URL = "https://app.cambercloud.com/personal-usage";
+
+/**
+ * Per-plan grants, as published on cambercloud.com/pricing (monthly).
+ *
+ * Only `llmMessages` is something a chat provider can meter for itself: one
+ * request served through the connection is one LLM message, which is exactly
+ * how Camber counts them. CPU/GPU hours and storage belong to jobs and
+ * notebooks, not to chat, so they are listed here for reference only — never
+ * drawn as a bar. A Pro **trial** is granted more messages than the paid Pro
+ * row (500 observed), which is why the plan is a per-connection choice and an
+ * explicit limit always wins over this table.
+ */
+export const CAMBER_PLAN_LIMITS = {
+  student: { label: "Student", llmMessages: 50, cpuHours: 40, gpuHours: 5, storageGb: 50 },
+  pro: { label: "Pro", llmMessages: 200, cpuHours: 100, gpuHours: 20, storageGb: 75 },
+  teams: { label: "Teams", llmMessages: 500, cpuHours: 300, gpuHours: 50, storageGb: 200 },
+};
+
 /** Codes surface in errors/logs so a failure is diagnosable after the fact. */
 export const CAMBER_ERROR_CODES = {
   noCredentials: "camber_no_credentials",

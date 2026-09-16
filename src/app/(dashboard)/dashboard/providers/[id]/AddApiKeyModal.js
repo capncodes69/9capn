@@ -4,6 +4,9 @@ import { useState } from "react";
 import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
+// Catalog, NOT camberAuth: this is a client component and the wire layer
+// reaches proxyFetch (see open-sse/AGENTS.md → Pitfalls).
+import { CAMBER_PLAN_LIMITS } from "open-sse/shared/camberCatalog.js";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
@@ -43,6 +46,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
   const [camberAgent, setCamberAgent] = useState("nova.cli");
+  const [camberPlan, setCamberPlan] = useState("");
+  const [camberMessageLimit, setCamberMessageLimit] = useState("");
+  const [camberPeriodStart, setCamberPeriodStart] = useState("");
   const [region, setRegion] = useState(defaultRegion);
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
@@ -73,7 +79,15 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       return { accountId: cloudflareData.accountId };
     }
     if (isCamber) {
-      return { camberAgent: (camberAgent || "nova.cli").trim().replace(/^@/, "") || "nova.cli" };
+      const data = { camberAgent: (camberAgent || "nova.cli").trim().replace(/^@/, "") || "nova.cli" };
+      // Optional meter config. Camber's own quota is not readable with a CLI
+      // key, so the dashboard counts 9capn's requests instead — and a count only
+      // becomes a progress bar once it has a denominator.
+      if (camberPlan) data.camberPlan = camberPlan;
+      const limit = Number(camberMessageLimit);
+      if (Number.isFinite(limit) && limit > 0) data.camberMessageLimit = Math.round(limit);
+      if (camberPeriodStart) data.camberPeriodStart = camberPeriodStart;
+      return data;
     }
     if (providerRegions && region) {
       return { region };
@@ -343,6 +357,47 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             <p className="text-xs text-text-muted mt-2">
               The API key is the token <code>camber login</code> prints, or the one in
               your Camber account settings.
+            </p>
+          </div>
+        )}
+        {isCamber && (
+          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
+            <h3 className="font-semibold mb-3 text-sm">Usage meter (optional)</h3>
+            <Select
+              label="Plan"
+              value={camberPlan}
+              onChange={(e) => setCamberPlan(e.target.value)}
+              options={[
+                { value: "", label: "Not set — show the count without a bar" },
+                ...Object.entries(CAMBER_PLAN_LIMITS).map(([id, plan]) => ({
+                  value: id,
+                  label: `${plan.label} — ${plan.llmMessages} messages/month`,
+                })),
+              ]}
+            />
+            <div className="mt-3">
+              <Input
+                label="Message limit (overrides the plan)"
+                value={camberMessageLimit}
+                onChange={(e) => setCamberMessageLimit(e.target.value)}
+                placeholder="e.g. 500"
+              />
+            </div>
+            <div className="mt-3">
+              <Input
+                label="Period start"
+                type="date"
+                value={camberPeriodStart}
+                onChange={(e) => setCamberPeriodStart(e.target.value)}
+              />
+            </div>
+            <p className="text-xs text-text-muted mt-2">
+              Camber meters <code>llm_messages</code> server-side, but only for a web
+              session — a CLI key cannot read it. The dashboard therefore counts the
+              requests 9capn served through this connection (one request = one message),
+              and only draws a bar when a limit is set here. A Pro trial often grants
+              more messages than paid Pro (500 vs 200), so an explicit limit wins.
+              Without a period start the count covers the current calendar month.
             </p>
           </div>
         )}
