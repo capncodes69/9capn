@@ -20,8 +20,39 @@ export const CAMBER_WEB_BASE_URL = "https://app.cambercloud.com";
 /** The browser page a device-flow session is authorised on. */
 export const CAMBER_LOGIN_PATH = "/auth-cli";
 
-/** Agent used when a connection does not pin one. Ships with the platform. */
-export const CAMBER_DEFAULT_AGENT = "nova.cli";
+/**
+ * Agent sent when a connection does not pin one: NONE.
+ *
+ * Camber cannot be asked for a bare model — probing the CLI surface for a raw
+ * inference route (`/chat/completions`, `/messages`, `/v1/chat/completions`, …)
+ * answers 404 for every candidate, and `/api/ai/*` (the web surface) refuses a
+ * CLI token with 401. Every chat goes through an agent, and `context_agent` is
+ * how one is chosen.
+ *
+ * Leaving the field OUT is itself a valid mode — it is what the web app does
+ * (its payload carries no `context_agent`, only `context_agent_version: null`).
+ * The server then runs `agent_orchestrator_tool` and picks a platform agent per
+ * request (observed: `CamberAgent`, `CodingAgent`). That is the behaviour we
+ * want by default, because a pinned *CLI* agent hijacks the model's identity:
+ * with `context_agent: "nova.cli"` the orchestrator reports
+ * `context_agent_name: "nova.cli"` and the model introduces itself as "Camber
+ * CLI agent for coding environments", offers `--api-key $CAMBER_TOKEN` and
+ * tries to run jobs in a Camber sandbox instead of editing local files. For a
+ * coding client that drives local tools, that is a broken assistant.
+ *
+ * An alias pinned by the connection still wins — some accounts genuinely want a
+ * specific agent's tools/skills. The empty string means "no agent pinned", and
+ * the raw field is omitted from the wire rather than sent empty.
+ */
+export const CAMBER_DEFAULT_AGENT = "";
+
+/**
+ * Values a connection may store that all mean "let Camber choose". Users type
+ * these when they mean the default, and the form used to render `nova.cli` as a
+ * hint, so accepting them is kinder than silently pinning an agent named
+ * "default".
+ */
+export const CAMBER_UNPINNED_AGENT_ALIASES = ["", "none", "default", "auto", "server"];
 
 /** Effort values the server accepts (model.Effort `oneof`). */
 export const CAMBER_EFFORTS = ["low", "medium", "high"];

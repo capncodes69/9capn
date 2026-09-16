@@ -352,9 +352,10 @@ describe("Camber usage reports identity, never a fabricated quota", () => {
     expect(modal).toContain('from "open-sse/shared/camberCatalog.js"');
   });
 
-  it("falls back to the default agent and skips team chatter when unknown", () => {
+  it("reports no agent rather than inventing one the connection never pinned", () => {
     const usage = parseCamberUsage({}, {});
-    expect(usage.message).toContain("Agent: nova.cli");
+    expect(usage.message).toContain("Agent: none pinned");
+    expect(usage.message).not.toContain("nova.cli");
     expect(usage.message).not.toContain("team");
     expect(usage.identity.username).toBeNull();
   });
@@ -368,6 +369,20 @@ describe("the dashboard surfaces the agent as a per-connection setting", () => {
     // The wire takes the alias WITHOUT the @, so the modal normalises it.
     expect(modal).toMatch(/replace\(\/\^@\//);
     expect(modal).toMatch(/Camber Agent/);
+  });
+
+  it("does NOT pin the CLI agent by default — that is what broke local tool use", () => {
+    // A live turn with context_agent="nova.cli" answers "Camber CLI agent for
+    // coding environments" and hunts for files in a Camber sandbox, because the
+    // server prepends that agent's system prompt. The form must not default to
+    // it, and the empty state must mean "send no context_agent at all".
+    const modal = source("src/app/(dashboard)/dashboard/providers/[id]/AddApiKeyModal.js");
+    expect(modal).toMatch(/const \[camberAgent, setCamberAgent\] = useState\(""\)/);
+    expect(modal).not.toMatch(/(camberAgent|\|\|)\s*(\?\?|\|\|)?\s*"nova\.cli"/);
+
+    // The registry's advertised default must be the same "no agent" sentinel.
+    const registry = source("open-sse/providers/registry/camber.js");
+    expect(registry).toMatch(/defaultAgent: CAMBER_DEFAULT_AGENT/);
   });
 
   it("hides the 'Your Code' block for providers that have no user code", () => {

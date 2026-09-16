@@ -28,18 +28,24 @@
 //                 { profile: { username, email, token }, teams: [ { id, uniqueName, name } ] }
 //                 and `profile.token` is what goes in the Bearer header.
 //   Chat (sync)   POST /chat  → stream. Body:
-//                 { context_agent, content, conversation_id?, model_name?,
+//                 { context_agent?, content, conversation_id?, model_name?,
 //                   effort?, thinking_enabled?, context_agent_version? }
 //                 `context_agent` is the agent alias WITHOUT the leading "@"
-//                 (e.g. "nova.cli"). Confirmed field types: conversation_id is
-//                 *uuid.UUID, effort is model.Effort, model_name is
-//                 model.SupportedModel, thinking_enabled is bool.
+//                 (e.g. "nova.cli") and is OMITTED when the connection pins no
+//                 agent — see CAMBER_DEFAULT_AGENT in camberCatalog.js for why
+//                 omitting it is the better default. Confirmed field types:
+//                 conversation_id is *uuid.UUID, effort is model.Effort,
+//                 model_name is model.SupportedModel, thinking_enabled is bool.
+//   Thinking      `thinking_enabled` (bool) is the real switch. The CLI's
+//                 --no-thinking is dropped on the wire (a bug in 1.0.39).
+//                 Not required for reasoning: a request that sends NEITHER
+//                 `thinking_enabled` NOR `effort` still streams `g:` frames, so
+//                 the server's own default is thinking ON. Sending nothing is
+//                 therefore a valid choice, not a silent disable.
 //   Effort        Validated with a `oneof` tag — the accepted set is exactly
 //                 low | medium | high (instant / xhigh / auto / none / default
 //                 are rejected). The CLI exposes --effort but NEVER sends the
-//                 field (bug in 1.0.39); we do send it.
-//   Thinking      `thinking_enabled` (bool) is the real switch. The CLI's
-//                 --no-thinking is likewise dropped on the wire.
+//                 field (bug in 1.0.39); we do send it when the client asked.
 //   Stream        The request asks for text/event-stream but the server answers
 //                 Content-Type: text/plain + Transfer-Encoding: chunked, and the
 //                 frames are the Vercel AI SDK v4 "data stream" protocol — a
@@ -55,9 +61,26 @@
 //                   d:  finish message    { finishReason, usage:{promptTokens,completionTokens} }
 //                   e:  finish step       { finishReason, usage, isContinued }
 //                   f:  start step        { messageId }
+//                   g:  reasoning delta   — THE CHAIN OF THOUGHT. Verified live:
+//                       `g:"47"`, `g:"*"`, `g:"89"`, `g:" = 47*90 -"` … for a
+//                       "47*89" prompt. Dropping this prefix is why thinking was
+//                       invisible in 9capn even though the server sent it.
+//                   i:  redacted reasoning { data }   (dropped: unusable text)
+//                   j:  reasoning signature { signature } (dropped: not content)
+//                   y:  conversation id    { conversation_id } — the server tells us
+//                       which conversation the turn ran in. NOT yet used to carry
+//                       context across turns (every turn re-seeds the transcript)
+//                       but it is the hook for doing so.
 //                   z:  custom end marker ([] seen)
 //                 The `d:` frame carries REAL token usage, which is the only
 //                 usage signal Camber gives us.
+//   Agents        There is NO agent catalog endpoint (`/agents`, `/agents/list`,
+//                 `/agent`, `/context-agents` all 404), and no raw inference route
+//                 (`/chat/completions`, `/completions`, `/messages`, `/responses`,
+//                 `/v1/chat/completions`, `/inference`, `/converse`, `/predict` all
+//                 404), which is why the agent is a free-text per-connection
+//                 setting rather than a dropdown, and why "no agent" is the hole
+//                 where a bare-ish model call lives.
 //   Chat (async)  POST /conversations/init { content, context_agent } → 201 with
 //                 the conversation; then the same POST /chat with
 //                 conversation_id; then poll
@@ -81,6 +104,12 @@
 //   #        https://api-v2.cambercloud.com/api/cli/chat
 //   # → "Unmarshal type error: expected=model.Effort, got=object, field=effort"
 //   # which proves the field exists; a silently ignored field means it does not.
+//   # Reasoning: any prompt that forces thinking (say 47*89) MUST emit `g:` frames;
+//   # if they vanish, the prefix set here is stale, not the account.
+//   # Agent: with context_agent omitted the orchestrator reports
+//   #   a:{"toolName":"agent_orchestrator_tool","result":{"context_agent_name":"CamberAgent"}}
+//   # and with a pinned CLI agent it reports that alias instead. Grep the capture
+//   # for `context_agent_name` to see which identity the answer came from.
 
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 
@@ -96,8 +125,12 @@ import {
   CAMBER_ERROR_CODES,
   CAMBER_LOGIN_PATH,
   CAMBER_MODELS,
+  CAMBER_PLAN_LIMITS,
   CAMBER_PROVIDER_ID,
+  CAMBER_UNPINNED_AGENT_ALIASES,
   CAMBER_WEB_BASE_URL,
+  CAMBER_WEB_USAGE_PATH,
+  CAMBER_WEB_USAGE_URL,
 } from "./camberCatalog.js";
 
 export {
@@ -108,8 +141,12 @@ export {
   CAMBER_ERROR_CODES,
   CAMBER_LOGIN_PATH,
   CAMBER_MODELS,
+  CAMBER_PLAN_LIMITS,
   CAMBER_PROVIDER_ID,
+  CAMBER_UNPINNED_AGENT_ALIASES,
   CAMBER_WEB_BASE_URL,
+  CAMBER_WEB_USAGE_PATH,
+  CAMBER_WEB_USAGE_URL,
 };
 
 const MODEL_WIRE_BY_ID = new Map(CAMBER_MODELS.map((m) => [m.id, m.wire]));
@@ -168,12 +205,20 @@ export function describeCamberKeyProblem(raw) {
   return null;
 }
 
-/** Agent alias as the wire wants it: no leading "@", defaulted. */
+/**
+ * Agent alias as the wire wants it: no leading "@", or "" when unpinned.
+ *
+ * "" is not a fallback to some other agent — it means the `context_agent` field
+ * is left off the request entirely, so Camber's orchestrator runs its own
+ * default agent. See CAMBER_DEFAULT_AGENT for the live evidence of why that is
+ * the better default than pinning `nova.cli`.
+ */
 export function resolveCamberAgent(providerSpecificData) {
   const raw = providerSpecificData?.camberAgent ?? providerSpecificData?.agent;
   const trimmed = typeof raw === "string" ? raw.trim() : "";
   const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  return withoutAt || CAMBER_DEFAULT_AGENT;
+  if (CAMBER_UNPINNED_AGENT_ALIASES.includes(withoutAt.toLowerCase())) return CAMBER_DEFAULT_AGENT;
+  return withoutAt;
 }
 
 /**
@@ -224,7 +269,24 @@ export function resolveCamberEffort(reasoningEffort) {
 // ───────────────────────── stream frame decoding ─────────────────────────
 
 /** AI SDK v4 data-stream prefixes we understand. */
-const FRAME_PREFIXES = new Set(["0", "2", "3", "8", "9", "a", "b", "c", "d", "e", "f", "z"]);
+const FRAME_PREFIXES = new Set([
+  "0",
+  "2",
+  "3",
+  "8",
+  "9",
+  "a",
+  "b",
+  "c",
+  "d",
+  "e",
+  "f",
+  "g",
+  "i",
+  "j",
+  "y",
+  "z",
+]);
 
 function safeJson(text) {
   try {
@@ -242,10 +304,12 @@ function safeJson(text) {
  * ignore (tool traffic is dropped here — the executor only ever forwards text).
  *
  * @param {string} line raw line, without its trailing newline
- * @returns {{type:"text",text:string}|{type:"error",message:string}
+ * @returns {{type:"text",text:string}|{type:"reasoning",text:string}
+ *          |{type:"error",message:string}
  *          |{type:"finish",finishReason:string|null,usage:object|null}
  *          |{type:"step",finishReason:string|null}
  *          |{type:"message",messageId:string}
+ *          |{type:"conversation",conversationId:string}
  *          |{type:"end"}|null}
  */
 export function decodeCamberFrame(line) {
@@ -291,10 +355,23 @@ export function decodeCamberFrame(line) {
       const parsed = safeJson(payload) || {};
       return { type: "message", messageId: parsed.messageId || null };
     }
+    case "g": {
+      // Reasoning delta — the model's chain of thought, streamed before the
+      // answer. Carries NO usage and must never be folded into `content`.
+      const parsed = safeJson(payload);
+      const text = typeof parsed === "string" ? parsed : parsed == null ? payload : null;
+      return text ? { type: "reasoning", text } : null;
+    }
+    case "y": {
+      const parsed = safeJson(payload) || {};
+      const conversationId = parsed.conversation_id || parsed.conversationId || null;
+      return conversationId ? { type: "conversation", conversationId } : null;
+    }
     case "z":
       return { type: "end" };
-    // Tool traffic (9/a/b/c), app data (2) and annotations (8) are intentionally
-    // dropped: the provider exposes a text chat surface only.
+    // Tool traffic (9/a/b/c), app data (2), annotations (8), redacted reasoning
+    // (i) and its signature (j) are intentionally dropped: the provider exposes
+    // a text chat surface, and half of a redacted thought is not content.
     default:
       return null;
   }
@@ -619,10 +696,12 @@ export function buildCamberChatBody({ model, messages, providerSpecificData, rea
   const agent = resolveCamberAgent(providerSpecificData);
   const level = resolveCamberEffort(reasoningEffort ?? providerSpecificData?.reasoningEffort);
   const body = {
-    context_agent: agent,
     content: buildCamberContent(messages),
     model_name: resolveCamberModel(model),
   };
+  // Omitted, never sent empty: the empty string is Camber's "no agent pinned"
+  // and the field is optional on the wire.
+  if (agent) body.context_agent = agent;
   if (conversationId) body.conversation_id = conversationId;
   if (level.effort) body.effort = level.effort;
   if (level.thinkingEnabled != null) body.thinking_enabled = level.thinkingEnabled;
@@ -696,9 +775,12 @@ export async function startCamberChat({ model, messages, credentials, providerSp
 
 /** POST /conversations/init — create the conversation the run will attach to. */
 export async function initCamberConversation({ content, providerSpecificData, credentials, signal, proxyOptions, config }) {
+  const agent = resolveCamberAgent(providerSpecificData);
+  const body = { content };
+  if (agent) body.context_agent = agent;
   return camberJson("/conversations/init", credentials, {
     method: "POST",
-    body: { content, context_agent: resolveCamberAgent(providerSpecificData) },
+    body,
     signal,
     proxyOptions,
     config,

@@ -49,6 +49,36 @@ describe("decodeCamberFrame — AI SDK v4 data-stream prefixes", () => {
     expect(event).toEqual({ type: "step", finishReason: "tool-calls" });
   });
 
+  it("decodes a reasoning delta — the chain of thought, verbatim from a live turn", () => {
+    // A "47*89" prompt streams its thinking first; these are real frames.
+    expect(decodeCamberFrame('g:"47"')).toEqual({ type: "reasoning", text: "47" });
+    expect(decodeCamberFrame('g:" = 47*90 -"')).toEqual({
+      type: "reasoning",
+      text: " = 47*90 -",
+    });
+    expect(decodeCamberFrame('g:"4183.\\n\\n"')).toEqual({
+      type: "reasoning",
+      text: "4183.\n\n",
+    });
+  });
+
+  it("keeps reasoning and text as different event types", () => {
+    // Folding `g:` into `content` would make a thinking client render it twice
+    // and a non-thinking client show the model talking to itself.
+    expect(decodeCamberFrame('g:"x"').type).not.toBe(decodeCamberFrame('0:"x"').type);
+  });
+
+  it("decodes the y: frame into the server-side conversation id", () => {
+    expect(
+      decodeCamberFrame('y:{"conversation_id":"a2bbaee6-670b-4a1a-863b-da485567b48a"}'),
+    ).toEqual({ type: "conversation", conversationId: "a2bbaee6-670b-4a1a-863b-da485567b48a" });
+  });
+
+  it("drops redacted reasoning and its signature — half a thought is not content", () => {
+    expect(decodeCamberFrame('i:{"data":"redacted"}')).toBeNull();
+    expect(decodeCamberFrame('j:{"signature":"abc123"}')).toBeNull();
+  });
+
   it("treats the custom z: frame as the end marker", () => {
     expect(decodeCamberFrame("z:[]")).toEqual({ type: "end" });
   });
@@ -196,19 +226,34 @@ describe("resolveCamberModel", () => {
 });
 
 describe("resolveCamberAgent", () => {
-  it("defaults to the platform agent", () => {
+  it("pins nothing by default — Camber's own orchestrator chooses the agent", () => {
+    expect(CAMBER_DEFAULT_AGENT).toBe("");
     expect(resolveCamberAgent({})).toBe(CAMBER_DEFAULT_AGENT);
     expect(resolveCamberAgent(undefined)).toBe(CAMBER_DEFAULT_AGENT);
   });
 
   it("strips the leading @ the wire does not take", () => {
     // The CLI sends context_agent WITHOUT the @ (verified on the wire).
-    expect(resolveCamberAgent({ camberAgent: "@nova.cli" })).toBe("nova.cli");
+    expect(resolveCamberAgent({ camberAgent: "@reze.my_agent" })).toBe("reze.my_agent");
     expect(resolveCamberAgent({ camberAgent: "reze.saint_martin_bot" })).toBe("reze.saint_martin_bot");
   });
 
   it("falls back when the stored value is blank", () => {
     expect(resolveCamberAgent({ camberAgent: "   " })).toBe(CAMBER_DEFAULT_AGENT);
+  });
+
+  it("reads the words users type when they mean 'no agent'", () => {
+    // The form used to render `nova.cli` as a hint, so these are the values a
+    // real connection carries after someone cleared the field.
+    for (const value of ["none", "default", "auto", "server", "NONE", " @Default "]) {
+      expect(resolveCamberAgent({ camberAgent: value })).toBe(CAMBER_DEFAULT_AGENT);
+    }
+  });
+
+  it("still pins a CLI agent when the account explicitly asks for one", () => {
+    // The identity hijack is a DEFAULT problem, not a broken feature: a pinned
+    // agent must survive, or the setting would be a lie.
+    expect(resolveCamberAgent({ camberAgent: "nova.cli" })).toBe("nova.cli");
   });
 });
 
@@ -252,17 +297,19 @@ describe("buildCamberContent", () => {
 });
 
 describe("buildCamberChatBody", () => {
-  it("sends the minimal body the CLI sends, plus the resolved model", () => {
+  it("omits context_agent instead of sending an empty one", () => {
+    // Sent empty, the field would name a nonexistent agent; omitted, the server
+    // runs its orchestrator. This is the whole point of CAMBER_DEFAULT_AGENT.
     const body = buildCamberChatBody({
       model: "claude-opus-5",
       messages: [{ role: "user", content: "hi" }],
       providerSpecificData: {},
     });
     expect(body).toEqual({
-      context_agent: "nova.cli",
       content: "hi",
       model_name: "bedrock:claude-opus-5",
     });
+    expect(body).not.toHaveProperty("context_agent");
   });
 
   it("omits effort/thinking when the caller expressed no intent", () => {
@@ -284,6 +331,15 @@ describe("buildCamberChatBody", () => {
     });
     expect(body.effort).toBe("high");
     expect(body.thinking_enabled).toBe(true);
+  });
+
+  it("sends context_agent only when the connection pinned one", () => {
+    const body = buildCamberChatBody({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "hi" }],
+      providerSpecificData: { camberAgent: "nova.cli" },
+    });
+    expect(body.context_agent).toBe("nova.cli");
   });
 
   it("honours the per-connection agent and reasoning default", () => {

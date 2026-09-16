@@ -6,10 +6,18 @@
 //
 //   1. THE STREAM IS NOT SSE. The request asks for text/event-stream and the
 //      server answers `text/plain` + chunked, with Vercel AI SDK v4 data-stream
-//      frames (`0:` text, `d:` finish+usage, `3:` error, `9:/a:/b:/c:` tool
-//      traffic). We parse that and re-emit OpenAI chat chunks. Tool frames are
-//      dropped: this provider is a text surface, and forwarding tool calls the
-//      client never declared would be worse than hiding them.
+//      frames (`0:` text, `g:` reasoning, `d:` finish+usage, `3:` error,
+//      `9:/a:/b:/c:` tool traffic). We parse that and re-emit OpenAI chat
+//      chunks. Tool frames are dropped: this provider is a text surface, and
+//      forwarding tool calls the client never declared would be worse than
+//      hiding them.
+//
+//      `g:` frames are the model's chain of thought and are forwarded as
+//      `delta.reasoning_content` (the repo-wide convention — see
+//      executors/grok-web.js, perplexity-web.js, cursor.js). They must NOT be
+//      merged into `content`: a client that renders reasoning separately would
+//      otherwise show the thinking twice, and one that does not would show the
+//      model apparently talking to itself.
 //
 //   2. COLD STARTS ARE REAL. A brand-new conversation measured ~2 minutes before
 //      the first frame (sandbox provisioning), while later turns in the same
@@ -110,12 +118,13 @@ export function translateCamberStream(response, model) {
   let buffer = "";
   let finished = false;
   let sawText = false;
+  let sawReasoning = false;
   let usage = null;
 
   const finish = (controller) => {
     if (finished) return;
     finished = true;
-    if (!sawText) {
+    if (!sawText && !sawReasoning) {
       // A conversation that produced no text still needs a well-formed stream.
       controller.enqueue(
         encoder.encode(sseChunk({ id, created, model, delta: { role: "assistant", content: "" } })),
@@ -133,6 +142,18 @@ export function translateCamberStream(response, model) {
       sawText = true;
       controller.enqueue(
         encoder.encode(sseChunk({ id, created, model, delta: { content: event.text } })),
+      );
+      return;
+    }
+    if (event.type === "reasoning") {
+      // Thinking is forwarded, not swallowed and not folded into content: the
+      // client decides whether to show it (Hermes/9router render
+      // `reasoning_content` as a separate block).
+      sawReasoning = true;
+      controller.enqueue(
+        encoder.encode(
+          sseChunk({ id, created, model, delta: { reasoning_content: event.text } }),
+        ),
       );
       return;
     }
@@ -303,7 +324,11 @@ class CamberExecutor extends BaseExecutor {
                 choices: [
                   {
                     index: 0,
-                    message: { role: "assistant", content: assembled.content },
+                    message: {
+                      role: "assistant",
+                      content: assembled.content,
+                      ...(assembled.reasoning ? { reasoning_content: assembled.reasoning } : {}),
+                    },
                     finish_reason: "stop",
                   },
                 ],
@@ -432,14 +457,15 @@ class CamberExecutor extends BaseExecutor {
   }
 }
 
-/** Drain a streaming response into { content, usage } for the non-stream case. */
+/** Drain a streaming response into { content, reasoning, usage } (non-stream case). */
 export async function collectCamberStream(response) {
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let reasoning = "";
   let usage = null;
   const reader = response.body?.getReader?.();
-  if (!reader) return { content, usage };
+  if (!reader) return { content, reasoning, usage };
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -449,6 +475,7 @@ export async function collectCamberStream(response) {
     buffer = rest;
     for (const event of events) {
       if (event.type === "text") content += event.text;
+      else if (event.type === "reasoning") reasoning += event.text;
       else if (event.type === "finish" && event.usage) usage = event.usage;
       else if (event.type === "error") {
         const error = new Error(event.message);
@@ -457,7 +484,7 @@ export async function collectCamberStream(response) {
       }
     }
   }
-  return { content: content || (buffer ? stripUnknownFrames(buffer) : ""), usage };
+  return { content: content || (buffer ? stripUnknownFrames(buffer) : ""), reasoning, usage };
 }
 
 /** Last-resort text extraction if the stream ended without a newline. */

@@ -45,7 +45,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     organization: "",
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
-  const [camberAgent, setCamberAgent] = useState("nova.cli");
+  const [camberAgent, setCamberAgent] = useState("");
   const [camberPlan, setCamberPlan] = useState("");
   const [camberMessageLimit, setCamberMessageLimit] = useState("");
   const [camberPeriodStart, setCamberPeriodStart] = useState("");
@@ -79,7 +79,12 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       return { accountId: cloudflareData.accountId };
     }
     if (isCamber) {
-      const data = { camberAgent: (camberAgent || "nova.cli").trim().replace(/^@/, "") || "nova.cli" };
+      // Empty means "pin no agent": the field is omitted and Camber's own
+      // orchestrator picks one. Pinning `nova.cli` here is what used to make the
+      // model answer as a Camber CLI instead of a local coding assistant.
+      const data = {};
+      const pinnedAgent = (camberAgent || "").trim().replace(/^@/, "");
+      if (pinnedAgent) data.camberAgent = pinnedAgent;
       // Optional meter config. Camber's own quota is not readable with a CLI
       // key, so the dashboard counts 9capn's requests instead — and a count only
       // becomes a progress bar once it has a denominator.
@@ -342,17 +347,24 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         )}
         {isCamber && (
           <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
-            <h3 className="font-semibold mb-3 text-sm">Camber Agent</h3>
+            <h3 className="font-semibold mb-3 text-sm">Camber Agent (optional)</h3>
             <Input
               label="Agent"
               value={camberAgent}
               onChange={(e) => setCamberAgent(e.target.value)}
-              placeholder="nova.cli"
+              placeholder="leave empty — Camber chooses"
             />
             <p className="text-xs text-text-muted mt-2">
-              Every Camber conversation runs through an agent. Use the alias from the
-              platform (e.g. <code>nova.cli</code>, <code>yourname.my_agent</code>) without the
-              leading <code>@</code>. Defaults to <code>nova.cli</code>.
+              Every Camber conversation is agent-mediated, so <em>something</em> always
+              runs. Leave this empty and Camber&apos;s own orchestrator picks the agent
+              per request. Pin an alias (e.g. <code>yourname.my_agent</code>, without
+              the leading <code>@</code>) only when you specifically want that
+              agent&apos;s tools and skills.
+            </p>
+            <p className="text-xs text-text-muted mt-2">
+              Avoid pinning the CLI agent <code>nova.cli</code> for coding clients: it
+              answers as the Camber CLI and looks for files in a Camber sandbox rather
+              than in your editor.
             </p>
             <p className="text-xs text-text-muted mt-2">
               The API key is the token <code>camber login</code> prints, or the one in

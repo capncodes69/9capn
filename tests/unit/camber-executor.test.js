@@ -162,6 +162,51 @@ describe("translateCamberStream", () => {
     expect(content).toEqual(["partial"]);
   });
 
+  it("forwards g: frames as delta.reasoning_content, not as content", async () => {
+    // Live capture for a "47*89" prompt. Before this, the thinking was silently
+    // dropped and clients showed no reasoning at all.
+    const translated = translateCamberStream(
+      frameResponse(
+        'g:"47"\ng:"*"\ng:"89"\n0:"4183"\nd:{"finishReason":"stop","usage":{"promptTokens":9,"completionTokens":1}}\nz:[]\n',
+      ),
+      "claude-opus-5",
+    );
+    const payloads = ssePayloads(await translated.text())
+      .filter((p) => p !== "[DONE]")
+      .map((p) => JSON.parse(p));
+
+    const reasoning = payloads
+      .map((p) => p.choices[0].delta.reasoning_content)
+      .filter(Boolean);
+    const content = payloads.map((p) => p.choices[0].delta.content).filter(Boolean);
+
+    expect(reasoning).toEqual(["47", "*", "89"]);
+    expect(content).toEqual(["4183"]);
+    // The chain of thought must never be folded into the answer.
+    expect(content.join("")).not.toContain("47*89");
+    expect(payloads.filter((p) => p.choices[0].finish_reason === "stop")).toHaveLength(1);
+  });
+
+  it("keeps a reasoning-only turn well formed", async () => {
+    // A truncated turn can carry thinking and no answer. The client must still
+    // get the thinking, exactly one finish chunk and one terminator — and no
+    // phantom empty-content chunk, because something WAS emitted.
+    const translated = translateCamberStream(frameResponse('g:"thinking"\nd:{"finishReason":"stop"}\n'), "m");
+    const payloads = ssePayloads(await translated.text());
+    const parsed = payloads.filter((p) => p !== "[DONE]").map((p) => JSON.parse(p));
+    expect(parsed.some((p) => p.choices[0].delta.reasoning_content === "thinking")).toBe(true);
+    expect(parsed.filter((p) => p.choices[0].finish_reason === "stop")).toHaveLength(1);
+    expect(payloads.filter((p) => p === "[DONE]")).toHaveLength(1);
+  });
+
+  it("still emits a role chunk when the run produced NOTHING at all", async () => {
+    const translated = translateCamberStream(frameResponse('d:{"finishReason":"stop"}\n'), "m");
+    const parsed = ssePayloads(await translated.text())
+      .filter((p) => p !== "[DONE]")
+      .map((p) => JSON.parse(p));
+    expect(parsed[0].choices[0].delta.role).toBe("assistant");
+  });
+
   it("passes an already-failed response straight through", async () => {
     const failed = new Response('{"code":2}', { status: 502 });
     expect(translateCamberStream(failed, "claude-opus-5")).toBe(failed);
@@ -175,6 +220,14 @@ describe("collectCamberStream / synthesizeCamberStream", () => {
     );
     expect(assembled.content).toBe("Hello world");
     expect(assembled.usage).toEqual({ prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 });
+  });
+
+  it("keeps reasoning out of the assembled content", async () => {
+    const assembled = await collectCamberStream(
+      frameResponse('g:"47*89 = "\ng:"4183"\n0:"4183"\nd:{"finishReason":"stop"}\n'),
+    );
+    expect(assembled.content).toBe("4183");
+    expect(assembled.reasoning).toBe("47*89 = 4183");
   });
 
   it("raises a 502 when the stream carries an error frame", async () => {
@@ -225,6 +278,21 @@ describe("execute — success paths", () => {
     expect(parsed.choices[0].message.content).toBe("hi there");
     expect(parsed.usage.total_tokens).toBe(5);
   });
+
+  it("carries reasoning_content on the non-streaming message", async () => {
+    startCamberChat.mockResolvedValue(okStream('g:"2+2"\n0:"4"\nd:{"finishReason":"stop"}\n'));
+    const result = await makeExecutor().execute({
+      model: "claude-opus-5",
+      body: { messages: [{ role: "user", content: "2+2?" }] },
+      stream: false,
+      credentials: { apiKey: "k" },
+      log,
+    });
+    const parsed = await result.response.json();
+    expect(parsed.choices[0].message.content).toBe("4");
+    expect(parsed.choices[0].message.reasoning_content).toBe("2+2");
+  });
+
 
   it("forwards the client's reasoning effort onto the wire", async () => {
     startCamberChat.mockResolvedValue(okStream('0:"x"\n'));

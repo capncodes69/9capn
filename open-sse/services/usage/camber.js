@@ -121,7 +121,9 @@ export function parseCamberUsage(me, providerSpecificData = {}, now = Date.now()
       "session, so a CLI key cannot read it — see the real meter at " +
       `${CAMBER_WEB_USAGE_URL} .`,
   );
-  if (agent) messages.push(`Agent: ${agent}.`);
+  // The card must not invent an agent: an unpinned connection has none, and
+  // saying so is the honest reading of "Camber's orchestrator picks one".
+  messages.push(agent ? `Agent: ${agent}.` : "Agent: none pinned — Camber picks one.");
   if (teams.length) {
     const selected = teams.find((team) => team?.is_selected) || null;
     messages.push(

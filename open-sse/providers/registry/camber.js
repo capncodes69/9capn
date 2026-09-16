@@ -2,12 +2,19 @@
 //
 // Two things are unusual about Camber and both are visible in this entry:
 //
-//   1. It is an AGENT platform, not a plain model gateway. POST /chat requires a
-//      `context_agent` (an agent alias such as "nova.cli"); the model is chosen
-//      separately. So the agent is a PER-CONNECTION setting (providerSpecificData
-//      .camberAgent, default "nova.cli") while the model stays the routed id --
+//   1. It is an AGENT platform, not a plain model gateway, and the agent is NOT
+//      optional: every chat is agent-mediated (no raw inference route exists, and
+//      /api/ai/* refuses a CLI key). The agent is a PER-CONNECTION setting
+//      (providerSpecificData.camberAgent) while the model stays the routed id --
 //      which is why the catalog below is a list of Bedrock Claude models rather
 //      than a list of agents.
+//
+//      The connection pins NO agent by default: `context_agent` is left off the
+//      request, which is what the web app does, and the server's orchestrator then
+//      picks a platform agent itself. Pinning a CLI agent (e.g. "nova.cli") makes
+//      the model introduce itself as a Camber CLI and try to run jobs in a Camber
+//      sandbox instead of editing the caller's local files -- verified live. Only
+//      set one when the account wants that agent's tools or skills.
 //
 //   2. There is NO model catalog endpoint: 13 candidate paths were probed and all
 //      404. The list below is the union of the CLI's `--model` values and the ids
@@ -47,7 +54,7 @@ export default {
   authModes: ["oauth", "apikey"],
   hasOAuth: true,
   authHint:
-    "Sign in with the browser flow, or paste the token `camber login` prints (CAMBER_API_KEY). The agent is pinned per connection.",
+    "Sign in with the browser flow, or paste the token `camber login` prints (CAMBER_API_KEY). Pin an agent only if you need that agent's tools — the default lets Camber choose.",
 
   transport: {
     // The real call is POST /chat; the executor streams and translates it.
@@ -85,6 +92,7 @@ export default {
     pollUrl: "/auth/poll",
     // The CLI polls every ~5s; match it.
     pollIntervalSeconds: 5,
+    // Empty = send no `context_agent` at all (Camber's own orchestrator decides).
     defaultAgent: CAMBER_DEFAULT_AGENT,
   },
 
