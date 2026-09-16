@@ -19,6 +19,7 @@ import { getOpenCodeGoUsage } from "./usage/opencode-go.js";
 import { getGroqUsage } from "./usage/groq.js";
 import { getZedUsage } from "./usage/zed.js";
 import { getCapnZedUsage } from "./usage/capnzed.js";
+import { getCamberUsage } from "./usage/camber.js";
 import { getXiaomiMimoUsage } from "./usage/xiaomi-mimo.js";
 import { resolveQoderCredentials } from "./qoderModels.js";
 import { getGlmUsage } from "./usage/glm.js";
@@ -65,6 +66,8 @@ const USAGE_HANDLERS = {
   groq: (c) => getGroqUsage(c.apiKey, c.proxyOptions),
   zed: (c) => getZedUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
   capnzed: (c) => getCapnZedUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
+  // API-key connections store the credential in apiKey; OAuth ones in accessToken.
+  camber: (c) => getCamberUsage(c.accessToken, c.providerSpecificData, c.proxyOptions, c.apiKey),
   "xiaomi-mimo": (c) => getXiaomiMimoUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
 };
 

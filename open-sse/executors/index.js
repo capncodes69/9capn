@@ -28,6 +28,7 @@ import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
 import { DevinCliExecutor } from "./devin-cli.js";
 import { FreebuffExecutor } from "./freebuff.js";
+import { CamberExecutor } from "./camber.js";
 
 const executors = {
   antigravity: new AntigravityExecutor(),
@@ -64,6 +65,7 @@ const executors = {
   windsurf: new WindsurfExecutor(),
   "devin-cli": new DevinCliExecutor(),
   freebuff: new FreebuffExecutor(),
+  camber: new CamberExecutor(),
 };
 
 const defaultCache = new Map();
@@ -108,3 +110,4 @@ export { default as ZedExecutor } from "./zed.js";
 export { default as CapnZedExecutor } from "./capnzed.js";
 export { default as WindsurfExecutor } from "./windsurf.js";
 export { DevinCliExecutor } from "./devin-cli.js";
+export { CamberExecutor } from "./camber.js";
