@@ -385,6 +385,16 @@ describe("the dashboard surfaces the agent as a per-connection setting", () => {
     expect(registry).toMatch(/defaultAgent: CAMBER_DEFAULT_AGENT/);
   });
 
+  it("warns that a Camber agent cannot touch the caller's machine", () => {
+    // Verified live: every agent available runs in a Camber-hosted Jupyter
+    // sandbox, the orchestrator's own pick writes to ./outputs/, and a forceful
+    // client [system] override still answered SANDBOX-ONLY. Users otherwise read
+    // "agent" as "local coding agent" and lose an afternoon to it.
+    const modal = source("src/app/(dashboard)/dashboard/providers/[id]/AddApiKeyModal.js");
+    expect(modal).toMatch(/cannot read or edit\s+\n?\s*files on this machine/);
+    expect(modal).toMatch(/sandbox/i);
+  });
+
   it("hides the 'Your Code' block for providers that have no user code", () => {
     const modalSource = source("src/shared/components/OAuthModal.js");
     expect(modalSource).toContain("{deviceData.user_code && (");

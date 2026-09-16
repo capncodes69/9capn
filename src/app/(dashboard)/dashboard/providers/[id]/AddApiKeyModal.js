@@ -370,6 +370,12 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
               The API key is the token <code>camber login</code> prints, or the one in
               your Camber account settings.
             </p>
+            <p className="text-xs text-amber-500 mt-2">
+              Camber agents run inside Camber&apos;s own sandbox and cannot read or edit
+              files on this machine — they work in a hosted notebook and return results
+              through Camber Stash. Connection only for chat and analysis; local coding
+              needs a provider that exposes the model with your own tools.
+            </p>
           </div>
         )}
         {isCamber && (
