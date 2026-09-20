@@ -483,25 +483,36 @@ export function parseQuotaData(provider, data) {
         break;
 
       case "qoder":
-        // Qoder ships a `user` quota and (optionally) an `organization`
-        // quota, both with same shape: {total, used, remaining, unit, resetAt}.
-        // Skip an organization bucket when its total is 0 — most personal
-        // Qoder accounts won't have one and rendering "0/0" is misleading.
+        // Qoder ships a `user` quota plus two optional buckets with the same
+        // shape {total, used, remaining, unit, resetAt}: an `organization`
+        // quota and an `addon` one (campaign rewards — qoder.com's "Bonus
+        // Credits (Total: N)" pack). A bucket the account does not hold reads
+        // total 0 and must be skipped, or most personal accounts get a
+        // misleading "0/0" bar; the `user` plan row is kept either way, since
+        // a free account legitimately has nothing there and should say so.
         // Don't forward Qoder's `remaining` field: it's an absolute credit
         // count, but getRemainingPercentage / QuotaTable interpret
         // `remaining` as a 0-100 percentage and would render 348 credits
         // as "348%". The percentage is computed from used/total instead.
+        // Forward `recurring` so a one-shot bonus pack reads "expires in"
+        // instead of implying it refills with the plan.
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([quotaType, quota]) => {
-            if (quotaType === "organization" && (!quota || (Number(quota.total) || 0) === 0)) {
-              return;
-            }
+            if (!quota) return;
+            if (quotaType !== "user" && (Number(quota.total) || 0) === 0) return;
             normalizedQuotas.push({
-              name: quotaType === "user" ? "Personal" : quotaType === "organization" ? "Organization" : quotaType,
+              name: quotaType === "user"
+                ? "Personal"
+                : quotaType === "organization"
+                  ? "Organization"
+                  : quotaType === "addon"
+                    ? "Bonus Credits"
+                    : quotaType,
               used: quota.used || 0,
               total: quota.total || 0,
               unit: quota.unit,
               resetAt: quota.resetAt || null,
+              recurring: quota.recurring !== false,
             });
           });
         }

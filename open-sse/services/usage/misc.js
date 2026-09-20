@@ -244,6 +244,30 @@ export async function getQoderUsage(accessToken, proxyOptions = null) {
         resetAt,
       },
     };
+    // Add-on credits — where campaign rewards land. qoder.com labels the bucket
+    // "Add-on Credits" and each grant a "Bonus Credits (Total: N)" pack, and it
+    // is kept deliberately OUT of the plan quota above (a spent trial still
+    // holds its bonus). The same response that carries `userQuota` carries this,
+    // so the row costs no extra request; Qoder omits the key entirely on an
+    // account that never claimed one (verified absent, not zero) and that must
+    // render no row rather than a 0/0 bar — the zero check below is the
+    // belt-and-braces half of that.
+    //
+    // `recurring: false` and no `resetAt`: a pack is a one-shot grant with its
+    // own expiry date, which this payload does not carry — the `expiresAt`
+    // above is the *plan's* reset, so stamping it here would claim the bonus
+    // refills whenever the plan does.
+    const addOnQuota = body.addOnQuota || {};
+    if ((Number(addOnQuota.total) || 0) > 0) {
+      quotas.addon = {
+        total: Number(addOnQuota.total) || 0,
+        used: Number(addOnQuota.used) || 0,
+        remaining: Number(addOnQuota.remaining) || 0,
+        unit: addOnQuota.unit || "credits",
+        resetAt: null,
+        recurring: false,
+      };
+    }
     return {
       quotas,
       totalUsagePercentage: Number(body.totalUsagePercentage) || 0,

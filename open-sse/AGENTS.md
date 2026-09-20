@@ -101,6 +101,15 @@ Pinning the CLI agent `nova.cli` — the old default — **hijacks the model's i
 
 **When Camber changes, re-probe in this order:** (1) the `/chat` frame prefixes and the `d:` usage field names — in particular that a thinking prompt still yields `g:` frames (if they vanish, the prefix set is stale, and thinking will silently disappear from every client); (2) the accepted `effort` values — send a bogus one and read the `oneof` error, which lists the legal set (that is how `low|medium|high` was confirmed); (3) whether `/models` or a **credential-readable** quota path has appeared (re-run the probe list in the `camberAuth.js` header — and note that a 401 rather than a 404 on `/credit-usage/me` is what tells you a route exists but rejects CLI keys); (4) `/auth/initiate` + `/auth/poll` status codes and the base64 blob shape — a change here breaks login **silently**, which is why `decodeCamberLoginToken()` validates the shape and 502s rather than saving a blank connection; (5) whether the plan grants moved (cambercloud.com/pricing → `CAMBER_PLAN_LIMITS`).
 
+## Qoder usage (add-on credits)
+
+`GET https://openapi.qoder.sh/api/v2/quota/usage` — the endpoint `registry/qoder.js` already declares — answers **two credit buckets in one response**, and the dashboard needs both:
+
+- `userQuota` — the plan quota. A Pro Trial reads `total: 300`; a free account reads `total: 0`, and that row is shown either way.
+- `addOnQuota` — campaign rewards, what qoder.com renders as *"Add-on Credits → Bonus Credits (Total: N)"*. It is the bucket the daily/event claims pay into, so it stays separate from the plan: a spent trial still holds its bonus. **The key is omitted outright — not sent as zero — when the account holds none** (verified on three reward-less accounts, absent in all three), so it must render no row rather than a 0/0 bar.
+
+`expiresAt` is the **plan's** reset, never the pack's — the pack's own *"Expires on …"* date is not in this payload — so the add-on row carries no `resetAt` and sets `recurring: false`. `services/usage/misc.js` `getQoderUsage` tags the bucket `addon`; `case "qoder"` in `ProviderLimits/utils.js` names it **Bonus Credits**, drops the absolute `remaining` (that field is read as a 0-100 percentage) and is the only place forwarding `recurring` for this provider. Both are pinned by `tests/unit/qoder-usage.test.js`.
+
 ## Pitfalls
 
 - A `registry/{id}.js` entry is in the **client** bundle (`src/shared/constants/providers.js` → dashboard shell). Import only *import-free* modules from it (e.g. `shared/camberCatalog.js`); importing a wire layer drags `proxyFetch` in, and `next build` then **fails** on `Module not found: Can't resolve 'net'` / `UnhandledSchemeError: node:assert` — the Fly deploy runs that build, so this is a deploy-blocker, not a warning. `tests/unit/camber-wiring.test.js` guards every file in the directory.
