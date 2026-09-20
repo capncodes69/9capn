@@ -2,15 +2,23 @@
 ARG NODE_IMAGE=node:22-alpine
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app
-# CN mirror for apk (used by builder and runner stages)
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
+# Package mirrors. The defaults are Alpine's and npm's own endpoints, which is
+# what a Fly remote builder reaches fastest: pointed at mirrors.aliyun.com and
+# npmmirror.com a cold build spends 10+ minutes on this one apk step and the
+# builder times the build out before the native deps are even installed. Pass
+# --build-arg APK_MIRROR / NPM_REGISTRY to build from a network that needs a
+# regional mirror instead.
+ARG APK_MIRROR=dl-cdn.alpinelinux.org
+RUN sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories
 
 FROM base AS builder
+
+ARG NPM_REGISTRY=https://registry.npmjs.org
 
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
 COPY package.json ./
-RUN npm install --registry=https://registry.npmmirror.com
+RUN npm install --registry=${NPM_REGISTRY}
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
