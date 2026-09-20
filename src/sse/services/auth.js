@@ -308,7 +308,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
-  const reason = typeof errorText === "string" ? errorText.slice(0, 100) : "Provider error";
+  const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
   // CapnZed meters the trial per ACCOUNT, not per model ($5 of hosted-model
   // credit), so an exhausted account must lock every model at once — otherwise
   // the next request picks the same account for a different model and 402s again.

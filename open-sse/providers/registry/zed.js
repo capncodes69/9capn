@@ -1,9 +1,12 @@
 // Zed provider — RSA keypair callback auth (NOT standard OAuth).
 export default {
   id: "zed",
-  priority: 10,
+  priority: 999,
   alias: "zd",
   uiAlias: "zd",
+  // capn-zed patch: the fork ships `capnzed` (trial-account rotation) as the
+  // visible Zed entry, so upstream's own `zed` stays out of the picker. Kept
+  // across the v0.5.81 merge on purpose — see tests/unit/capnzed-wiring.test.js.
   hidden: true,
   display: {
     name: "Zed",

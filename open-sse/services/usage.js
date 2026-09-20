@@ -23,6 +23,7 @@ import { getCamberUsage } from "./usage/camber.js";
 import { getXiaomiMimoUsage } from "./usage/xiaomi-mimo.js";
 import { resolveQoderCredentials } from "./qoderModels.js";
 import { getGlmUsage } from "./usage/glm.js";
+import { getCommandCodeUsage } from "./usage/commandcode.js";
 import {
   getIflowUsage,
   getOllamaUsage,
@@ -69,6 +70,7 @@ const USAGE_HANDLERS = {
   // API-key connections store the credential in apiKey; OAuth ones in accessToken.
   camber: (c) => getCamberUsage(c.accessToken, c.providerSpecificData, c.proxyOptions, c.apiKey),
   "xiaomi-mimo": (c) => getXiaomiMimoUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
+  commandcode: (c) => getCommandCodeUsage(c.apiKey, c.proxyOptions),
 };
 
 export async function getUsageForProvider(connection, proxyOptions = null, options = {}) {
