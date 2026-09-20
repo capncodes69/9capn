@@ -496,17 +496,27 @@ export function parseQuotaData(provider, data) {
         // as "348%". The percentage is computed from used/total instead.
         // Forward `recurring` so a one-shot bonus pack reads "expires in"
         // instead of implying it refills with the plan.
+        //
+        // qoder.com lists each reward separately ("Bonus Credits (Total: 100)
+        // … Expires on Oct 20, 2026"), because rewards accumulate and expire on
+        // their own 30-day clocks. That list is web-session-only, so the card
+        // gets the aggregate plus the count the aggregate implies (`packs`,
+        // derived in the usage handler) and says "(N packs)" instead of
+        // pretending one row is one reward. No date: none is readable.
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([quotaType, quota]) => {
             if (!quota) return;
             if (quotaType !== "user" && (Number(quota.total) || 0) === 0) return;
+            const addonPacks = Number(quota.packs) || 0;
             normalizedQuotas.push({
               name: quotaType === "user"
                 ? "Personal"
                 : quotaType === "organization"
                   ? "Organization"
                   : quotaType === "addon"
-                    ? "Bonus Credits"
+                    ? addonPacks > 1
+                      ? `Bonus Credits (${addonPacks} packs)`
+                      : "Bonus Credits"
                     : quotaType,
               used: quota.used || 0,
               total: quota.total || 0,

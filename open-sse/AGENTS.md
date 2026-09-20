@@ -108,7 +108,25 @@ Pinning the CLI agent `nova.cli` — the old default — **hijacks the model's i
 - `userQuota` — the plan quota. A Pro Trial reads `total: 300`; a free account reads `total: 0`, and that row is shown either way.
 - `addOnQuota` — campaign rewards, what qoder.com renders as *"Add-on Credits → Bonus Credits (Total: N)"*. It is the bucket the daily/event claims pay into, so it stays separate from the plan: a spent trial still holds its bonus. **The key is omitted outright — not sent as zero — when the account holds none** (verified on three reward-less accounts, absent in all three), so it must render no row rather than a 0/0 bar.
 
-`expiresAt` is the **plan's** reset, never the pack's — the pack's own *"Expires on …"* date is not in this payload — so the add-on row carries no `resetAt` and sets `recurring: false`. `services/usage/misc.js` `getQoderUsage` tags the bucket `addon`; `case "qoder"` in `ProviderLimits/utils.js` names it **Bonus Credits**, drops the absolute `remaining` (that field is read as a 0-100 percentage) and is the only place forwarding `recurring` for this provider. Both are pinned by `tests/unit/qoder-usage.test.js`.
+`expiresAt` is the **plan's** reset, never the pack's, so the add-on row carries no `resetAt` and sets `recurring: false`. `services/usage/misc.js` `getQoderUsage` tags the bucket `addon`; `case "qoder"` in `ProviderLimits/utils.js` names it **Bonus Credits**, drops the absolute `remaining` (that field is read as a 0-100 percentage) and is the only place forwarding `recurring` for this provider. Both are pinned by `tests/unit/qoder-usage.test.js`.
+
+### Rewards accumulate — and the per-reward list is not on this surface
+
+Per `docs.qoder.com/events/100credits`, claimed Credits **never reset with the day**: *"if you claim 100 Credits today and use 20, then claim another 100 Credits tomorrow, you will have 180 Credits across the two rewards"*, and *"each reward is valid for 30 days from its own claim date"*. The campaign payload states the rule verbatim — `benefit.validity = {"mode":"RELATIVE_DAYS","days":30}`, "Daily reset: 10:00 (UTC+8). Valid for 30 days after claiming." — but it carries **no claim timestamp** (`claimStatus: "CLAIMED"` and nothing else; every key printed), so a pack cannot be dated from it.
+
+qoder.com's own Usage page shows the real thing (*"1 Included Credit Packs → Bonus Credits (Total: 100) Remaining 100 credits. Expires on Oct 20, 2026"*). That list comes from `GET https://qoder.com/api/v2/me/usages/big_model_credits` (found in the web bundle `g.alicdn.com/qbase/qoder/0.0.705/index.js`, which also calls `/api/v1/me/usages/big_model_credits/histories`; its UI keys are `creditPacksList` / `creditPackItem` / `expireTime` / `expiring`). **It is session-cookie auth: it answers 401 Unauthorized to both a PAT (`pt-…`) and an exchanged job token, where a missing path answers 404.** Do not re-hunt it on the token surface — measured 2026-09-20 and all dead ends:
+
+| Probe | Result |
+|---|---|
+| `/api/v2/quota/usage`, `/sash/api/v2/me/usage` (openapi) | 200 — aggregate only |
+| `Cosy-ClientType` 1-20 on the sash usage route | identical response for all 20 |
+| 15 candidate names on openapi (`/sash/api/v1|v2/me/creditPacks`, `…/packs`, `…/credits`, `…/rewards`, `…/claims`, `/api/v2/creditPack/list`, …) | 404 |
+| `center.qoder.sh` equivalents, incl. the histories route | 404 |
+| query variants (`?includeCreditPacks`, `?withPacks`, `?detail`, `?quota_key=…`, …) | no change |
+
+So the card reports what the aggregate proves and nothing more: `packs = total / 100` (every grant is `benefit.amount: 100`, and `total` is the sum of live pack sizes), labelled **Bonus Credits (N packs)** when N > 1. The division is only taken when it is exact — a non-multiple stays one pack rather than reporting a fraction. A dated per-reward row needs a source that does not exist here, so never stamp `resetAt` for this bucket.
+
+Fleet note: as of 2026-09-20 no account anywhere held more than one reward (`addon_credits` distribution across 464 rows: `{100: 190, 0: 274}`), because the daily claim only opened 18 Sep — so a genuine multi-pack payload has still never been observed.
 
 ## Pitfalls
 

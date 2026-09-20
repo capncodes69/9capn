@@ -60,7 +60,42 @@ describe("getQoderUsage add-on credits", () => {
       // *plan's* reset and the pack expiry is not published here.
       resetAt: null,
       recurring: false,
+      // 100 credits = one reward.
+      packs: 1,
     });
+  });
+
+  it("counts the accumulated rewards the aggregate is made of", async () => {
+    // docs.qoder.com/events/100credits: rewards never reset — "if you claim 100
+    // Credits today and use 20, then claim another 100 Credits tomorrow, you
+    // will have 180 Credits across the two rewards". So `total` is the sum of
+    // the pack sizes, which is what makes the count recoverable at all. The
+    // per-reward list (with each reward's own expiry) is web-session-only.
+    proxyAwareFetch.mockResolvedValueOnce(
+      jsonResponse({
+        ...PLAN_WITH_BONUS,
+        addOnQuota: { total: 200, used: 20, remaining: 180, unit: "credits" },
+      }),
+    );
+
+    const usage = await getUsageForProvider({ provider: "qoder", accessToken: "jt-live" });
+
+    expect(usage.quotas.addon).toMatchObject({ total: 200, used: 20, remaining: 180, packs: 2 });
+    // Still no date — the count is the only thing the aggregate can prove.
+    expect(usage.quotas.addon.resetAt).toBeNull();
+  });
+
+  it("never divides an odd aggregate into a fractional pack count", async () => {
+    proxyAwareFetch.mockResolvedValueOnce(
+      jsonResponse({
+        ...PLAN_WITH_BONUS,
+        addOnQuota: { total: 150, used: 0, remaining: 150, unit: "credits" },
+      }),
+    );
+
+    const usage = await getUsageForProvider({ provider: "qoder", accessToken: "jt-live" });
+
+    expect(usage.quotas.addon.packs).toBe(1);
   });
 
   it("omits the row when the account never claimed a reward (key absent)", async () => {
@@ -120,6 +155,40 @@ describe("parseQuotaData(qoder)", () => {
     // Absolute credit counts must never reach the 0-100 percentage maths.
     expect(byName["Personal"].remaining).toBeUndefined();
     expect(byName["Bonus Credits"].remaining).toBeUndefined();
+  });
+
+  it("says how many rewards a multi-pack aggregate holds", () => {
+    const rows = parseQuotaData("qoder", {
+      quotas: {
+        user: { total: 300, used: 0, remaining: 300, unit: "credits" },
+        addon: {
+          total: 300,
+          used: 20,
+          remaining: 280,
+          unit: "credits",
+          resetAt: null,
+          recurring: false,
+          packs: 3,
+        },
+      },
+    });
+
+    const addon = rows.find((q) => q.name.startsWith("Bonus Credits"));
+    // Three rewards with three separate 30-day clocks cannot be drawn as three
+    // bars (their dates are not readable), so the count rides on the one row.
+    expect(addon.name).toBe("Bonus Credits (3 packs)");
+    expect(addon.total).toBe(300);
+  });
+
+  it("keeps the plain label for a single reward", () => {
+    const rows = parseQuotaData("qoder", {
+      quotas: {
+        user: { total: 300, used: 0, remaining: 300, unit: "credits" },
+        addon: { total: 100, used: 0, remaining: 100, unit: "credits", packs: 1 },
+      },
+    });
+
+    expect(rows.map((q) => q.name)).toEqual(["Personal", "Bonus Credits"]);
   });
 
   it("drops every empty non-plan bucket (organization and add-on alike)", () => {

@@ -257,15 +257,31 @@ export async function getQoderUsage(accessToken, proxyOptions = null) {
     // own expiry date, which this payload does not carry — the `expiresAt`
     // above is the *plan's* reset, so stamping it here would claim the bonus
     // refills whenever the plan does.
+    //
+    // `packs` is the one thing about the *number* of rewards that is
+    // recoverable here. docs.qoder.com/events/100credits: claimed Credits
+    // accumulate ("claim 100 today and use 20, then claim another 100 tomorrow,
+    // you will have 180 across the two rewards") and each is "valid for 30 days
+    // from its own claim date"; every grant this account can receive is 100
+    // (campaign `benefit.amount`), so the aggregate divides into whole packs.
+    // The per-pack list — what qoder.com's Usage page renders as "Bonus Credits
+    // (Total: 100) … Expires on Oct 20, 2026" — is NOT on this surface: it comes
+    // from qoder.com's session route `/api/v2/me/usages/big_model_credits`, which
+    // answers 401 to a PAT or job token (the path is real, the credential is the
+    // wrong kind), and no token-surface route carries a pack date (measured: the
+    // /api/v2, /sash and center equivalents are 404, and `Cosy-ClientType` 1-20
+    // changes nothing). So: report the count, never a date that cannot be read.
     const addOnQuota = body.addOnQuota || {};
-    if ((Number(addOnQuota.total) || 0) > 0) {
+    const addOnTotal = Number(addOnQuota.total) || 0;
+    if (addOnTotal > 0) {
       quotas.addon = {
-        total: Number(addOnQuota.total) || 0,
+        total: addOnTotal,
         used: Number(addOnQuota.used) || 0,
         remaining: Number(addOnQuota.remaining) || 0,
         unit: addOnQuota.unit || "credits",
         resetAt: null,
         recurring: false,
+        packs: addOnTotal % 100 === 0 ? addOnTotal / 100 : 1,
       };
     }
     return {
