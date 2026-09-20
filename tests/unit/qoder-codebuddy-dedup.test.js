@@ -132,6 +132,29 @@ describe("CodeBuddy + Qoder connection identity", () => {
     expect(await db.getProviderConnections({ provider: "codebuddy-cn" })).toHaveLength(1);
   });
 
+  it("dedups a CodeBuddy JWT pasted as the API key, not just a device-flow token", async () => {
+    // The executor sends `apiKey` as the bearer, so the token reaches the repo
+    // in that field when the row was added from the API-key form.
+    const token = makeJwt({ sub: "cb-apikey", preferred_username: "apikey-nova" });
+    const first = await db.createProviderConnection({
+      provider: "codebuddy-intl", authType: "apikey", apiKey: token, name: "Account 1",
+    });
+    const second = await db.createProviderConnection({
+      provider: "codebuddy-intl", authType: "apikey", apiKey: token, name: "Account 2",
+    });
+    // The device-flow row and the API-key row for one identity must also agree,
+    // which is why the branch does not filter on authType.
+    const viaOAuth = await db.createProviderConnection({
+      provider: "codebuddy-intl", authType: "oauth",
+      accessToken: makeJwt({ sub: "cb-apikey", preferred_username: "apikey-nova", iat: 7 }),
+      name: "Account 3",
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(viaOAuth.id).toBe(first.id);
+    expect(await db.getProviderConnections({ provider: "codebuddy-intl" })).toHaveLength(1);
+  });
+
   // ── Qoder ──────────────────────────────────────────────────────────────
 
   it("updates one row when the same Qoder PAT is added twice", async () => {

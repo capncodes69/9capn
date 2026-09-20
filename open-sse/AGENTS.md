@@ -137,13 +137,15 @@ CodeBuddy and Qoder both answer a login with an **opaque credential and no profi
 | OAuth `mapTokens` | `oauth/providers/codebuddy-{intl,cn}.js` | Decodes the device-flow JWT and returns `email`, `name`, `displayName`, `providerSpecificData.{userId,username}` |
 | OAuth `mapTokens` | `oauth/providers/qoder.js` | `name` = `_qoderName` → email → `qoder-<userId[:8]>`; also keeps `providerSpecificData.email` |
 | Repo dedup | `db/repos/connectionsRepo.js` | Matches a CodeBuddy row on JWT `sub` (else `providerSpecificData.userId`, else email) and a Qoder row on token → `userId` → email |
+
+The CodeBuddy token is read from **`accessToken` → `refreshToken` → `apiKey`** (`findCodeBuddyJwt`). All three are needed: the device flow stores it as `accessToken`, while the API-key form pastes the same JWT into `apiKey`, which the executor sends as the bearer — reading only the first two dedups one path and stacks rows on the other.
 | API-key intake | `app/api/providers/route.js` | Exchanges a pasted Qoder PAT (`/api/v1/jobToken/exchange` → `/api/v1/userinfo`) to learn `email`/`name`/`userId` before saving |
 
 **Why `name` and `email` must be filled at the provider layer:** `createProviderConnection` prefers `data.name` verbatim, and its OAuth branch only runs for rows that carry an `email`. A CodeBuddy token with no `email` claim therefore gets a **synthetic but stable** fallback (`cb-<sub>` / `cb-cn-<sub>`, `qoder-user-<userId>`) — synthetic is the point: it is stable across logins, so the second login folds onto the first row instead of creating a new one.
 
 **Qoder's PAT is opaque**, so the exchange in `route.js` is the only way to name a pasted key. It is wrapped in a bare `try {} catch {}` **on purpose**: an unreachable `openapi.qoder.sh` must still save the connection, because the key itself does not depend on the lookup — the row just keeps the caller's name and no email. The `name` rewrite is also conditional (`/^Key \d+$/.test(name)`), so an operator-chosen label is never overwritten.
 
-**Two traps when touching this:** the codebuddy branch deliberately does **not** check `authType`, because the same identity can arrive as `oauth` and as `apikey` and collapsing them is the goal; and the JWT decoder is **duplicated** inside `connectionsRepo.js` rather than imported from `lib/oauth/providerHelpers.js`, because the DB layer must not reach into the OAuth layer. Both dedup paths, the synthetic fallbacks and the PAT exchange are pinned by `tests/unit/qoder-codebuddy-dedup.test.js`.
+**Two traps when touching this:** the codebuddy branch deliberately does **not** check `authType`, because the same identity can arrive as `oauth` and as `apikey` and collapsing them is the goal (that is also why the `apiKey` fallback above is not optional); and the JWT decoder is **duplicated** inside `connectionsRepo.js` rather than imported from `lib/oauth/providerHelpers.js`, because the DB layer must not reach into the OAuth layer. Both dedup paths, the synthetic fallbacks and the PAT exchange are pinned by `tests/unit/qoder-codebuddy-dedup.test.js`.
 
 ## Pitfalls
 

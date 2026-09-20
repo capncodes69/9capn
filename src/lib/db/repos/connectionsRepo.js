@@ -95,6 +95,17 @@ function decodeJwtPayload(token) {
   }
 }
 
+// A CodeBuddy token can arrive in three places depending on how the row was
+// created: the device flow stores it as `accessToken` (+ a refresh token), while
+// the API-key mode pastes the same JWT into `apiKey`, which the executor sends
+// as the bearer. All three are read, or the same account dedups on one path and
+// stacks rows on the other.
+function findCodeBuddyJwt(data) {
+  return decodeJwtPayload(data.accessToken)
+    || decodeJwtPayload(data.refreshToken)
+    || decodeJwtPayload(data.apiKey);
+}
+
 function deriveConnectionName(data, fallbackName) {
   if (data.provider === "github") {
     return data.providerSpecificData?.githubLogin
@@ -104,7 +115,7 @@ function deriveConnectionName(data, fallbackName) {
       || fallbackName;
   }
   if (data.provider === "codebuddy-intl" || data.provider === "codebuddy-cn") {
-    const jwt = decodeJwtPayload(data.accessToken) || decodeJwtPayload(data.refreshToken);
+    const jwt = findCodeBuddyJwt(data);
     return jwt?.preferred_username
       || jwt?.email
       || data.email
@@ -162,7 +173,7 @@ export async function createProviderConnection(data) {
     let existing = null;
 
     if (data.provider === "codebuddy-intl" || data.provider === "codebuddy-cn") {
-      const incomingJwt = decodeJwtPayload(data.accessToken) || decodeJwtPayload(data.refreshToken);
+      const incomingJwt = findCodeBuddyJwt(data);
       const incomingSub = incomingJwt?.sub || data.providerSpecificData?.userId;
       const incomingEmail = data.email || incomingJwt?.email;
 
@@ -177,7 +188,7 @@ export async function createProviderConnection(data) {
 
       existing = all.find(c => {
         if (incomingSub) {
-          const cJwt = decodeJwtPayload(c.accessToken) || decodeJwtPayload(c.refreshToken);
+          const cJwt = findCodeBuddyJwt(c);
           const cSub = cJwt?.sub || c.providerSpecificData?.userId;
           if (cSub && cSub === incomingSub) return true;
         }
