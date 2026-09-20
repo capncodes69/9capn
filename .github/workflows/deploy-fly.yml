@@ -1,7 +1,8 @@
-# Deploys the gateway to Fly.io (app `9capn` — see fly.9capn.toml).
+# Deploys the gateway to Fly.io (app `capn-router` — see fly.toml).
 #
 # Repository secret required:
-#   FLY_API_TOKEN — a deploy-scoped token: `flyctl tokens create deploy -a 9capn`
+#   FLY_API_TOKEN — a deploy-scoped token: `flyctl tokens create deploy -a capn-router`
+#   Set it with `gh secret set FLY_API_TOKEN --repo <owner>/<repo>`.
 #
 # Runtime secrets (INITIAL_PASSWORD, JWT_SECRET, API_KEY_SECRET, …) are NOT
 # managed here. They live in Fly and survive a deploy; set them once with
@@ -21,7 +22,7 @@ permissions:
 concurrency:
   # Never run two deploys at once: a half-applied release is worse than a
   # slightly stale one, so queue instead of cancelling.
-  group: fly-9capn-deploy
+  group: fly-capn-router-deploy
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +39,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           if [ -z "$FLY_API_TOKEN" ]; then
-            echo "::error::FLY_API_TOKEN is not set. Create one with: flyctl tokens create deploy -a 9capn"
+            echo "::error::FLY_API_TOKEN is not set. Create one with: flyctl tokens create deploy -a capn-router"
             echo "::error::Then add it as a repository secret (Settings -> Secrets and variables -> Actions)."
             exit 1
           fi
@@ -51,4 +52,4 @@ jobs:
       - name: Deploy to Fly.io
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --config fly.9capn.toml --remote-only
+        run: flyctl deploy --config fly.toml --remote-only

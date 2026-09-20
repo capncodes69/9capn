@@ -1,0 +1,47 @@
+# fly.toml — the gateway's Fly.io deployment.
+#
+# Deploy with: fly deploy            (reads this file)
+# The GitHub workflow `.github/workflows/deploy-fly.yml` runs the same command
+# on every push to the default branch, so this file and that workflow must name
+# the same app.
+#
+# The app is `capn-router`; `capnrouter_data` is its volume. That volume holds
+# `/app/data` — the SQLite dashboard DB, `jwt-secret`, `machine-id` and the CLI
+# secret — which is what keeps dashboard sessions and provider connections
+# across a deploy. Restore it before a first boot on a fresh volume, or the app
+# starts from an empty DB.
+
+app = 'capn-router'
+primary_region = 'sin'
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = 'production'
+  PORT = '20128'
+  HOSTNAME = '0.0.0.0'
+  NEXT_TELEMETRY_DISABLED = '1'
+  DATA_DIR = '/app/data'
+
+[http_service]
+  internal_port = 20128
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 250
+    soft_limit = 200
+
+[[vm]]
+  memory = '8192mb'
+  cpu_kind = 'performance'
+  cpus = 4
+
+[mounts]
+  source = 'capnrouter_data'
+  destination = '/app/data'
