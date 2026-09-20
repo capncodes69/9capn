@@ -128,6 +128,23 @@ So the card reports what the aggregate proves and nothing more: `packs = total /
 
 Fleet note: as of 2026-09-20 no account anywhere held more than one reward (`addon_credits` distribution across 464 rows: `{100: 190, 0: 274}`), because the daily claim only opened 18 Sep — so a genuine multi-pack payload has still never been observed.
 
+## Connection identity (CodeBuddy, Qoder)
+
+CodeBuddy and Qoder both answer a login with an **opaque credential and no profile object**, so `createProviderConnection` had nothing to match on and the same account could be added once per session — stacking `Account N` / `Key N` rows. Identity is now recovered in three places, and all three are needed:
+
+| Layer | File | What it does |
+|---|---|---|
+| OAuth `mapTokens` | `oauth/providers/codebuddy-{intl,cn}.js` | Decodes the device-flow JWT and returns `email`, `name`, `displayName`, `providerSpecificData.{userId,username}` |
+| OAuth `mapTokens` | `oauth/providers/qoder.js` | `name` = `_qoderName` → email → `qoder-<userId[:8]>`; also keeps `providerSpecificData.email` |
+| Repo dedup | `db/repos/connectionsRepo.js` | Matches a CodeBuddy row on JWT `sub` (else `providerSpecificData.userId`, else email) and a Qoder row on token → `userId` → email |
+| API-key intake | `app/api/providers/route.js` | Exchanges a pasted Qoder PAT (`/api/v1/jobToken/exchange` → `/api/v1/userinfo`) to learn `email`/`name`/`userId` before saving |
+
+**Why `name` and `email` must be filled at the provider layer:** `createProviderConnection` prefers `data.name` verbatim, and its OAuth branch only runs for rows that carry an `email`. A CodeBuddy token with no `email` claim therefore gets a **synthetic but stable** fallback (`cb-<sub>` / `cb-cn-<sub>`, `qoder-user-<userId>`) — synthetic is the point: it is stable across logins, so the second login folds onto the first row instead of creating a new one.
+
+**Qoder's PAT is opaque**, so the exchange in `route.js` is the only way to name a pasted key. It is wrapped in a bare `try {} catch {}` **on purpose**: an unreachable `openapi.qoder.sh` must still save the connection, because the key itself does not depend on the lookup — the row just keeps the caller's name and no email. The `name` rewrite is also conditional (`/^Key \d+$/.test(name)`), so an operator-chosen label is never overwritten.
+
+**Two traps when touching this:** the codebuddy branch deliberately does **not** check `authType`, because the same identity can arrive as `oauth` and as `apikey` and collapsing them is the goal; and the JWT decoder is **duplicated** inside `connectionsRepo.js` rather than imported from `lib/oauth/providerHelpers.js`, because the DB layer must not reach into the OAuth layer. Both dedup paths, the synthetic fallbacks and the PAT exchange are pinned by `tests/unit/qoder-codebuddy-dedup.test.js`.
+
 ## Pitfalls
 
 - A `registry/{id}.js` entry is in the **client** bundle (`src/shared/constants/providers.js` → dashboard shell). Import only *import-free* modules from it (e.g. `shared/camberCatalog.js`); importing a wire layer drags `proxyFetch` in, and `next build` then **fails** on `Module not found: Can't resolve 'net'` / `UnhandledSchemeError: node:assert` — the Fly deploy runs that build, so this is a deploy-blocker, not a warning. `tests/unit/camber-wiring.test.js` guards every file in the directory.

@@ -88,10 +88,17 @@ const qoder = {
       refreshToken: tokens.refresh_token || null,
       expiresIn: tokens.expires_in,
       email,
-      displayName,
+      // `name` is what `createProviderConnection` uses directly, so it must be
+      // filled here — leaving it to `displayName` alone is how an OAuth login
+      // ended up named "Account N" while the API-key path resolved properly.
+      name: displayName || rawEmail || (userId ? `qoder-${userId.slice(0, 8)}` : null),
+      displayName: displayName || rawEmail || null,
       providerSpecificData: {
         authMethod: "device",
         userId,
+        // Kept so the dedup in `createProviderConnection` can match an
+        // email even when the row's flat `email` is the synthetic fallback.
+        email: rawEmail || null,
         machineId: tokens._qoderMachineId || "",
         organizationId: tokens._qoderOrganizationId || "",
       },

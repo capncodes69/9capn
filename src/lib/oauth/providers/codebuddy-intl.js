@@ -1,4 +1,5 @@
 import { CODEBUDDY_INTL_CONFIG } from "../constants/oauth.js";
+import { decodeJwtPayload } from "../providerHelpers.js";
 
 // CodeBuddy International — mirrors codebuddy-cn flow against the .ai domain.
 const codebuddyIntl = {
@@ -63,12 +64,31 @@ const codebuddyIntl = {
     if (data.code === 11217) return { ok: true, data: { error: "authorization_pending" } };
     return { ok: false, data: { error: data.msg || "unknown_error" } };
   },
-  mapTokens: (tokens) => ({
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    expiresIn: tokens.expires_in || 86400,
-    providerSpecificData: {},
-  }),
+  mapTokens: (tokens) => {
+    // The identity lives in the token, not in the request: CodeBuddy answers
+    // the device flow with JWTs and no profile object. Reading `sub`/
+    // `preferred_username` here is what lets a re-login update the existing
+    // row instead of adding another "Account N".
+    const jwt = decodeJwtPayload(tokens.access_token) || decodeJwtPayload(tokens.refresh_token);
+    const email = jwt?.email || null;
+    const username = jwt?.preferred_username || null;
+    const userId = jwt?.sub || null;
+
+    return {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresIn: tokens.expires_in || 86400,
+      // `createProviderConnection` only dedups on a non-empty email, so a token
+      // without one falls back to a stable synthetic id derived from `sub`.
+      email: email || (userId ? `cb-${userId}` : null),
+      name: username || email || (userId ? `cb-${userId.slice(0, 8)}` : null),
+      displayName: username || email || null,
+      providerSpecificData: {
+        userId,
+        username,
+      },
+    };
+  },
 };
 
 export default codebuddyIntl;

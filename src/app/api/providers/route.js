@@ -119,12 +119,55 @@ export async function POST(request) {
     if (!apiKey && provider !== "ollama-local") {
       return NextResponse.json({ error: `${isWebCookieProvider ? "Cookie value" : "API Key"} is required` }, { status: 400 });
     }
-    const connectionName = name || displayName || AI_PROVIDERS[provider]?.name;
+    let connectionName = name || displayName || AI_PROVIDERS[provider]?.name;
     if (!connectionName) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
     let providerSpecificData = normalizeProviderSpecificData(provider, body, body.providerSpecificData);
+
+    // A Qoder PAT is opaque, so a pasted key used to land as "Key N" with no
+    // email — which left the dedup in `createProviderConnection` nothing to
+    // match on and let the same PAT be added twice. Exchange it once here to
+    // learn the identity, and keep the resolved fields on the connection so the
+    // next paste of the same key resolves to the same row. Every failure is
+    // swallowed on purpose: an unreachable openapi must still let the key be
+    // saved, since the connection itself does not depend on this lookup.
+    let connectionEmail = body.email || null;
+    if (provider === "qoder" && apiKey) {
+      try {
+        const raw = apiKey.trim();
+        const pat = raw.startsWith("pt-") ? raw : `pt-${raw}`;
+        const exRes = await fetch("https://openapi.qoder.sh/api/v1/jobToken/exchange", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "Cosy-Version": "1.0.1",
+            "Cosy-ClientType": "5",
+          },
+          body: JSON.stringify({ personal_token: pat }),
+        });
+        if (exRes.ok) {
+          const exData = await exRes.json();
+          if (exData.token) {
+            const uRes = await fetch("https://openapi.qoder.sh/api/v1/userinfo", {
+              headers: { Authorization: `Bearer ${exData.token}` },
+            });
+            if (uRes.ok) {
+              const uData = await uRes.json();
+              if (uData.email) connectionEmail = uData.email;
+              if ((uData.name || uData.username) && (!name || /^Key \d+$/i.test(name))) {
+                connectionName = uData.name || uData.username;
+              }
+              providerSpecificData = providerSpecificData || {};
+              if (uData.id) providerSpecificData.userId = uData.id;
+              if (uData.email) providerSpecificData.email = uData.email;
+            }
+          }
+        }
+      } catch {}
+    }
 
     // Compatible LLM nodes support multiple API-key connections (key pool); runtime
     // rotates/fails over via getProviderCredentials. Embedding nodes stay single-connection.
@@ -176,6 +219,7 @@ export async function POST(request) {
       provider,
       authType: isWebCookieProvider ? "cookie" : "apikey",
       name: connectionName,
+      email: connectionEmail,
       apiKey: apiKey || "",
       priority: priority || 1,
       globalPriority: globalPriority || null,

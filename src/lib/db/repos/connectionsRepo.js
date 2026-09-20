@@ -78,12 +78,42 @@ function upsert(db, c) {
   );
 }
 
+// The DB layer must not reach into the OAuth layer for this, so the decoder is
+// duplicated here rather than imported from `lib/oauth/providerHelpers`. It is
+// only used to read the *identity* claims (sub/email/preferred_username) off a
+// CodeBuddy token — never to trust anything else in the payload.
+function decodeJwtPayload(token) {
+  try {
+    if (!token || typeof token !== "string") return null;
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function deriveConnectionName(data, fallbackName) {
   if (data.provider === "github") {
     return data.providerSpecificData?.githubLogin
       || data.providerSpecificData?.githubEmail
       || data.email
       || data.providerSpecificData?.githubName
+      || fallbackName;
+  }
+  if (data.provider === "codebuddy-intl" || data.provider === "codebuddy-cn") {
+    const jwt = decodeJwtPayload(data.accessToken) || decodeJwtPayload(data.refreshToken);
+    return jwt?.preferred_username
+      || jwt?.email
+      || data.email
+      || fallbackName;
+  }
+  if (data.provider === "qoder") {
+    return data.displayName
+      || data.providerSpecificData?.email
+      || data.email
       || fallbackName;
   }
   return fallbackName;
@@ -130,7 +160,50 @@ export async function createProviderConnection(data) {
     const all = db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [data.provider]).map(rowToConn);
 
     let existing = null;
-    if (data.authType === "oauth" && data.email) {
+
+    if (data.provider === "codebuddy-intl" || data.provider === "codebuddy-cn") {
+      const incomingJwt = decodeJwtPayload(data.accessToken) || decodeJwtPayload(data.refreshToken);
+      const incomingSub = incomingJwt?.sub || data.providerSpecificData?.userId;
+      const incomingEmail = data.email || incomingJwt?.email;
+
+      // A re-login of the same CodeBuddy account carries no email in the
+      // request, so the identity is read off the token: without this the row
+      // lands as another "Account N" beside the first one.
+      if (incomingJwt?.email && !data.email) data.email = incomingJwt.email;
+      if (incomingJwt?.preferred_username && (!data.name || /^Account \d+$/i.test(data.name))) {
+        data.name = incomingJwt.preferred_username;
+        data.displayName = incomingJwt.preferred_username;
+      }
+
+      existing = all.find(c => {
+        if (incomingSub) {
+          const cJwt = decodeJwtPayload(c.accessToken) || decodeJwtPayload(c.refreshToken);
+          const cSub = cJwt?.sub || c.providerSpecificData?.userId;
+          if (cSub && cSub === incomingSub) return true;
+        }
+        if (incomingEmail && c.email && c.email.toLowerCase() === incomingEmail.toLowerCase()) {
+          return true;
+        }
+        return false;
+      });
+    } else if (data.provider === "qoder") {
+      // Qoder rows are keyed by API key (PAT), so an identical PAT pasted twice
+      // must land on the same row; userId and email catch a rotated PAT for an
+      // identity already on the list.
+      const incomingToken = (data.apiKey || data.accessToken || "").trim();
+      const incomingUserId = data.providerSpecificData?.userId || data.userId;
+      const incomingEmail = (data.email || data.providerSpecificData?.email || "").trim().toLowerCase();
+
+      existing = all.find(c => {
+        const cToken = (c.apiKey || c.accessToken || "").trim();
+        if (incomingToken && cToken && incomingToken === cToken) return true;
+        const cUserId = c.providerSpecificData?.userId || c.userId;
+        if (incomingUserId && cUserId && incomingUserId === cUserId) return true;
+        const cEmail = (c.email || c.providerSpecificData?.email || "").trim().toLowerCase();
+        if (incomingEmail && cEmail && incomingEmail === cEmail) return true;
+        return false;
+      });
+    } else if (data.authType === "oauth" && data.email) {
       const incomingUsername = data.providerSpecificData?.username;
       const incomingWs = data.providerSpecificData?.chatgptAccountId;
       existing = all.find(c => {

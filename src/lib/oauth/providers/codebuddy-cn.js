@@ -1,4 +1,5 @@
 import { CODEBUDDY_CONFIG } from "../constants/oauth.js";
+import { decodeJwtPayload } from "../providerHelpers.js";
 
 // CodeBuddy (Tencent) - Browser OAuth Polling Flow
 // 1. POST stateUrl → get { state, authUrl }
@@ -69,12 +70,27 @@ const codebuddyCn = {
     if (data.code === 11217) return { ok: true, data: { error: "authorization_pending" } };
     return { ok: false, data: { error: data.msg || "unknown_error" } };
   },
-  mapTokens: (tokens) => ({
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    expiresIn: tokens.expires_in || 86400,
-    providerSpecificData: {},
-  }),
+  mapTokens: (tokens) => {
+    // Same shape as codebuddy-intl: the JWT carries the identity, so a re-login
+    // lands on the existing row instead of accumulating "Account N" duplicates.
+    const jwt = decodeJwtPayload(tokens.access_token) || decodeJwtPayload(tokens.refresh_token);
+    const email = jwt?.email || null;
+    const username = jwt?.preferred_username || null;
+    const userId = jwt?.sub || null;
+
+    return {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresIn: tokens.expires_in || 86400,
+      email: email || (userId ? `cb-cn-${userId}` : null),
+      name: username || email || (userId ? `cb-cn-${userId.slice(0, 8)}` : null),
+      displayName: username || email || null,
+      providerSpecificData: {
+        userId,
+        username,
+      },
+    };
+  },
 };
 
 export default codebuddyCn;
