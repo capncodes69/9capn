@@ -255,13 +255,22 @@ export async function GET(request, { params }) {
       const startUrl = searchParams.get("start_url");
       const region = searchParams.get("region");
       const authMethod = searchParams.get("auth_method");
-      const deviceOptions = provider === "kiro"
-        ? {
-            ...(startUrl ? { startUrl } : {}),
-            ...(region ? { region } : {}),
-            ...(authMethod ? { authMethod } : {}),
-          }
-        : undefined;
+      // Host hint: a product that rides another provider's slug names the host
+      // its provider calls belong on — WorkBuddy on `codebuddy-intl`, because
+      // 9router has no WorkBuddy provider (same realm, different host). The
+      // provider validates it and ignores anything outside its brands; providers
+      // that don't read it see one extra key they never look at.
+      const domain = searchParams.get("domain");
+      const deviceOptions = {
+        ...(provider === "kiro"
+          ? {
+              ...(startUrl ? { startUrl } : {}),
+              ...(region ? { region } : {}),
+              ...(authMethod ? { authMethod } : {}),
+            }
+          : {}),
+        ...(domain ? { domain } : {}),
+      };
       
       // Providers that don't use PKCE for device code (Grok CLI HAR: plain device_code, no challenge)
       const noPkceDeviceProviders = [

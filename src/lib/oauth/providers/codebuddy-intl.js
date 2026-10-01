@@ -1,19 +1,36 @@
 import { CODEBUDDY_INTL_CONFIG } from "../constants/oauth.js";
 import { decodeJwtPayload } from "../providerHelpers.js";
 
+// 9router has no WorkBuddy provider, and it does not need one: WorkBuddy and
+// CodeBuddy are one Keycloak realm and answer the same plugin-auth paths — only
+// the host differs. A caller attaching a WorkBuddy account therefore rides this
+// provider and names the host its two calls belong on: `?domain=workbuddy.ai`
+// on the device-code request and `extraData.domain` on the poll. With no hint
+// the config's own host is used, so a CodeBuddy attach is unchanged.
+const BRAND_HOST_RE = /(?:^|\.)(?:codebuddy|workbuddy)\.ai$/;
+
+/** The `www.` host a caller asked for, or "" when it isn't one of the brands. */
+function brandHost(domain) {
+  const d = String(domain || "").trim().toLowerCase().replace(/^www\./, "");
+  if (!d || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d) || !BRAND_HOST_RE.test(d)) return "";
+  return `www.${d}`;
+}
+
 // CodeBuddy International — mirrors codebuddy-cn flow against the .ai domain.
 const codebuddyIntl = {
   config: CODEBUDDY_INTL_CONFIG,
   flowType: "device_code",
-  requestDeviceCode: async (config) => {
-    const response = await fetch(`${config.stateUrl}?platform=${config.platform}`, {
+  requestDeviceCode: async (config, _codeChallenge, options = {}) => {
+    const host = brandHost(options.domain);
+    const stateUrl = host ? `https://${host}/v2/plugin/auth/state` : config.stateUrl;
+    const response = await fetch(`${stateUrl}?platform=${config.platform}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
         "User-Agent": config.userAgent,
         "X-Requested-With": "XMLHttpRequest",
-        "X-Domain": "www.codebuddy.ai",
+        "X-Domain": host || "www.codebuddy.ai",
         "X-No-Authorization": "true",
         "X-No-User-Id": "true",
         "X-Product": "SaaS",
@@ -33,14 +50,16 @@ const codebuddyIntl = {
       _isCodeBuddy: true,
     };
   },
-  pollToken: async (config, deviceCode) => {
-    const response = await fetch(`${config.tokenUrl}?state=${encodeURIComponent(deviceCode)}`, {
+  pollToken: async (config, deviceCode, _codeVerifier, extraData = {}) => {
+    const host = brandHost(extraData?.domain);
+    const tokenUrl = host ? `https://${host}/v2/plugin/auth/token` : config.tokenUrl;
+    const response = await fetch(`${tokenUrl}?state=${encodeURIComponent(deviceCode)}`, {
       method: "GET",
       headers: {
         Accept: "application/json",
         "User-Agent": config.userAgent,
         "X-Requested-With": "XMLHttpRequest",
-        "X-Domain": "www.codebuddy.ai",
+        "X-Domain": host || "www.codebuddy.ai",
         "X-No-Authorization": "true",
         "X-No-User-Id": "true",
         "X-No-Enterprise-Id": "true",
