@@ -22,3 +22,19 @@ tests/unit/translator-request-normalization.test.js :: request normalization cla
 tests/unit/translator-request-normalization.test.js :: request normalization filterToOpenAIFormat flattens text-only arrays to string
 tests/unit/translator-request-normalization.test.js :: request normalization parseSSELine supports provider raw NDJSON stream lines
 tests/unit/translator-request-normalization.test.js :: request normalization translateRequest keeps /v1/messages Claude->OpenAI text payloads string-safe
+tests/translator/thinking-unified.test.js :: applyThinking per provider format GLM-5.2 also gets reasoning_effort (supported from 5.2 onward)
+tests/unit/cline-free-tier-models.test.js :: cline-free namespace pricing still bills the paid twin at its published rate
+tests/unit/codex-gpt6-lite.test.js :: Codex GPT-6 Sol/Luna transport lists gpt-6.1-sol with Codex capabilities
+tests/unit/codex-refresh-token.test.js :: Codex Refresh Token getRefreshLeadMs (early refresh config) should return provider-specific lead time for OAuth providers
+tests/unit/image-generation.test.js :: handleImageGenerationCore generates image with Codex gpt-5.5-image using current Codex version header
+tests/unit/image-generation.test.js :: handleImageGenerationCore generates image with Codex gpt-5.6-sol-image using current Codex version header
+tests/unit/image-generation.test.js :: handleImageGenerationCore generates image with Codex gpt-5.6-terra-image using current Codex version header
+tests/unit/image-generation.test.js :: handleImageGenerationCore generates image with Codex gpt-5.6-luna-image using current Codex version header
+tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote Responses named sang auto (plain và max)
+tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote Chat function named sang auto (plain và max)
+tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote Claude tool named sang auto (plain và max)
+tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote required sang auto (plain và max)
+tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only demote none sang auto (plain và max)
+tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only giữ auto và absent; tools/input nguyên vẹn
+tests/unit/opencode-free-tool-choice.test.js :: opencode Free 1.3 tool_choice auto-only wire: execute gửi choice auto tới /zen/v1/responses
+tests/unit/opencode-muse-spark-thinking.test.js :: OpenCode Free Muse Spark thinking strips prior-turn reasoning items carrying encrypted_content from input

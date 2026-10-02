@@ -149,7 +149,15 @@ export async function getProviderConnectionById(id) {
   return rowToConn(row);
 }
 
-// Internal sync reorder — must be called INSIDE a transaction
+// Internal sync reorder — must be called INSIDE a transaction.
+//
+// Normalizes priorities to a contiguous 1..N after a DELETE or an explicit
+// reorder, so gaps don't accumulate over time.
+//
+// Deliberately NOT called on insert: a new connection already gets
+// MAX(priority)+1, which sorts after every existing row, so the order is
+// identical with or without the rewrite. Skipping it there is what makes
+// import O(1) per key instead of O(pool) — see createProviderConnection.
 function reorderInTx(db, providerId) {
   const list = db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [providerId]).map(rowToConn);
   list.sort((a, b) => {
@@ -158,7 +166,10 @@ function reorderInTx(db, providerId) {
     return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
   });
   list.forEach((c, i) => {
-    db.run(`UPDATE providerConnections SET priority = ? WHERE id = ?`, [i + 1, c.id]);
+    const want = i + 1;
+    if ((c.priority || 0) !== want) {
+      db.run(`UPDATE providerConnections SET priority = ? WHERE id = ?`, [want, c.id]);
+    }
   });
 }
 
@@ -168,9 +179,37 @@ export async function createProviderConnection(data) {
   let result;
 
   db.transaction(() => {
-    const all = db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [data.provider]).map(rowToConn);
+    // apikey connections are deduped by name and need only the current max
+    // priority, so query for those directly instead of loading the whole pool
+    // (O(pool) per key — the other half of the import cost in #4311). The oauth
+    // branch below still scans, because its identity rules compare fields
+    // inside providerSpecificData and have no single-column equivalent.
+    //
+    // codebuddy/qoder apikey rows are the exception: their identity (JWT sub /
+    // PAT + userId + email) also lives in providerSpecificData, so a same-name
+    // lookup misses a re-login that carries a different name and would insert
+    // a duplicate row. Those providers keep the full-pool scan.
+    const identityInSpecificData =
+      data.provider === "codebuddy-intl" ||
+      data.provider === "codebuddy-cn" ||
+      data.provider === "qoder";
+    const isApikey = data.authType === "apikey" && !!data.name && !identityInSpecificData;
+    const all = isApikey
+      ? db.all(
+          `SELECT * FROM providerConnections WHERE provider = ? AND authType = ? AND name = ?`,
+          [data.provider, "apikey", data.name]
+        ).map(rowToConn)
+      : db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [data.provider]).map(rowToConn);
+    const poolSize = isApikey
+      ? db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ?`, [data.provider])?.n ?? all.length
+      : all.length;
 
     let existing = null;
+    // Set when `existing` matched on the account's own identity (JWT sub /
+    // PAT / userId / email) rather than on the display name. An identity match
+    // is the same account re-added, so it updates the row silently; only a
+    // plain name collision is the #4311 overwrite case.
+    let identityMatch = false;
 
     if (data.provider === "codebuddy-intl" || data.provider === "codebuddy-cn") {
       const incomingJwt = findCodeBuddyJwt(data);
@@ -197,6 +236,7 @@ export async function createProviderConnection(data) {
         }
         return false;
       });
+      if (existing) identityMatch = true;
     } else if (data.provider === "qoder") {
       // Qoder rows are keyed by API key (PAT), so an identical PAT pasted twice
       // must land on the same row; userId and email catch a rotated PAT for an
@@ -214,6 +254,7 @@ export async function createProviderConnection(data) {
         if (incomingEmail && cEmail && incomingEmail === cEmail) return true;
         return false;
       });
+      if (existing) identityMatch = true;
     } else if (data.authType === "oauth" && data.email) {
       const incomingUsername = data.providerSpecificData?.username;
       const incomingWs = data.providerSpecificData?.chatgptAccountId;
@@ -253,6 +294,25 @@ export async function createProviderConnection(data) {
     // access_token: never dedup — user manages duplicates manually
 
     if (existing) {
+      // Name collision on an apikey connection used to silently replace the
+      // stored apiKey, so a script that reused names ("Key 1", "Key 2", …)
+      // destroyed existing pool entries with no 409 and no warning. Callers that
+      // genuinely mean "update this one" pass allowOverwrite; everyone else gets
+      // a typed error naming the row that would have been replaced. #4311
+      //
+      // An identity match is not a collision: the same CodeBuddy JWT / Qoder
+      // PAT (or userId/email) re-added must keep updating its own row quietly,
+      // however the caller named it this time.
+      if (data.allowOverwrite === false && !identityMatch) {
+        const err = new Error(
+          `A connection named "${existing.name}" already exists for provider "${data.provider}". ` +
+          `Pass allowOverwrite: true to replace it.`
+        );
+        err.code = "PROVIDER_NAME_CONFLICT";
+        err.existingId = existing.id;
+        err.existingName = existing.name;
+        throw err;
+      }
       const normalized = resetHealthStateOnActivation(existing, data);
       const merged = { ...existing, ...normalized, updatedAt: now };
       upsert(db, merged);
@@ -262,11 +322,15 @@ export async function createProviderConnection(data) {
 
     let connectionName = data.name || null;
     if (!connectionName && (data.authType === "oauth" || data.authType === "access_token")) {
-      connectionName = deriveConnectionName(data, data.email || `Account ${all.length + 1}`);
+      connectionName = deriveConnectionName(data, data.email || `Account ${poolSize + 1}`);
     }
     let connectionPriority = data.priority;
     if (!connectionPriority) {
-      connectionPriority = all.reduce((m, c) => Math.max(m, c.priority || 0), 0) + 1;
+      // MAX(priority)+1 in SQL rather than a reduce over the loaded pool: the
+      // apikey path no longer has the whole pool in memory, and the aggregate
+      // is served by the index instead of a row scan. #4311
+      const maxRow = db.get(`SELECT MAX(priority) AS m FROM providerConnections WHERE provider = ?`, [data.provider]);
+      connectionPriority = (maxRow?.m || 0) + 1;
     }
 
     const conn = {
@@ -288,7 +352,11 @@ export async function createProviderConnection(data) {
     if (data.email !== undefined) conn.email = data.email;
 
     upsert(db, conn);
-    reorderInTx(db, data.provider);
+    // No reorderInTx here. `conn.priority` is already MAX(priority)+1, so the
+    // row sorts last and the resulting order is what reorderInTx would have
+    // produced anyway. The rewrite cost ~2N statements per insert — O(pool) —
+    // which made a 5k-key import O(n*m): ~25M statements at a 5k pool, and it
+    // serialized every parallel writer on the same transaction. #4311
     result = conn;
   });
 

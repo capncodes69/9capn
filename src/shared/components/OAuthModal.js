@@ -180,7 +180,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           return;
         }
 
-        if (data.error === "expired_token" || data.error === "access_denied") {
+        if (data.error === "expired_token" || data.error === "access_denied" || data.fatal) {
           throw new Error(data.errorDescription || data.error);
         }
 
@@ -294,11 +294,14 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         "codebuddy-cn",
         "codebuddy-intl",
         "qoder",
+        "qoder-cn",
         "grok-cli",
         "freebuff",
         // Camber: session id from /auth/initiate, no user code to type — the
         // login URL is opened and the poll does the rest (qoder-shaped panel).
         "camber",
+        "muse",
+        "glm",
       ];
       if (deviceCodeProviders.includes(provider)) {
         setIsDeviceCode(true);
@@ -333,7 +336,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
               _authMethod: data._authMethod,
               _startUrl: data._startUrl,
             }
-          : provider === "qoder"
+          : (provider === "qoder" || provider === "qoder-cn")
           ? {
               _qoderNonce: data._qoderNonce,
               _qoderMachineId: data._qoderMachineId,
@@ -341,6 +344,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
             }
           : (provider === "kimi" || provider === "kimi-coding")
           ? { _kimiDeviceId: data._kimiDeviceId }
+          : provider === "glm"
+          ? { _zcodePollToken: data._zcodePollToken }
           : null;
         startPolling(
           data.device_code,

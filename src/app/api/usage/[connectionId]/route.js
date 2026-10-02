@@ -8,6 +8,7 @@ import { applyCapnZedSpend } from "open-sse/services/usage/capnzed.js";
 import { CAPNZED_PROVIDER_ID } from "open-sse/shared/capnzedAuth.js";
 import { applyCamberMessageCount } from "open-sse/services/usage/camber.js";
 import { CAMBER_PROVIDER_ID } from "open-sse/shared/camberCatalog.js";
+import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { USAGE_APIKEY_PROVIDERS } from "@/shared/constants/providers";
@@ -26,6 +27,11 @@ function isAuthExpiredMessage(usage) {
  * @returns Promise<{ connection, refreshed: boolean }>
  */
 export async function refreshAndUpdateCredentials(connection, force = false, proxyOptions = null) {
+  // Re-read latest tokens: OpenAI rotates the refresh token on every refresh, and
+  // refreshing with a stale snapshot (reuse) revokes the whole session → account logout.
+  const latest = connection.id ? await getProviderConnectionById(connection.id) : null;
+  if (latest) connection = latest;
+
   const executor = getExecutor(connection.provider);
 
   // Build credentials object from connection
@@ -51,6 +57,11 @@ export async function refreshAndUpdateCredentials(connection, force = false, pro
 
   // Use executor's refreshCredentials method (with optional proxy)
   const refreshResult = await executor.refreshCredentials(credentials, console, proxyOptions);
+
+  // Refresh token reused/invalidated — token family is revoked; do not continue with the dead token.
+  if (refreshResult && isUnrecoverableRefreshError(refreshResult)) {
+    throw new Error("Refresh token invalid or reused. Please re-authorize the connection.");
+  }
 
   if (!refreshResult) {
     // Refresh failed but we still have an accessToken — try with existing token
