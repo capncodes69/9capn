@@ -177,16 +177,22 @@ export async function GET(request, { params }) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
-    // Allow OAuth connections, plus whitelisted apikey providers (glm/minimax/kiro/...)
-    // Kiro's headless api-key flow persists authType "api_key" (underscore) while
-    // generic apikey providers persist "apikey" — accept both spellings here.
+    // Allow OAuth connections, plus whitelisted static-bearer providers
+    // (glm/minimax/kiro/...). Kiro's headless api-key flow persists authType
+    // "api_key" (underscore) while generic apikey providers persist "apikey" —
+    // accept both spellings here. "access_token" is the same static bearer with
+    // no refresh pair (a raw JWT pasted straight in — CodeBuddy connections
+    // arrive that way), so providers that meter an API key (features.usageApikey)
+    // meter it too.
     const isOAuth = connection.authType === "oauth";
-    const isApikeyAuth =
-      connection.authType === "apikey" || connection.authType === "api_key";
-    const isApikeyEligible =
-      isApikeyAuth && USAGE_APIKEY_PROVIDERS.includes(connection.provider);
+    const isStaticBearerAuth =
+      connection.authType === "apikey" ||
+      connection.authType === "api_key" ||
+      connection.authType === "access_token";
+    const isStaticBearerEligible =
+      isStaticBearerAuth && USAGE_APIKEY_PROVIDERS.includes(connection.provider);
 
-    if (!isOAuth && !isApikeyEligible) {
+    if (!isOAuth && !isStaticBearerEligible) {
       return Response.json({ message: "Usage not available for this connection" });
     }
 
