@@ -1,6 +1,7 @@
 import { Readable } from "stream";
 import { MEMORY_CONFIG } from "../config/runtimeConfig.js";
 import { dbg } from "./debugLog.js";
+import { getBrandDispatcher, isBrandHostUrl } from "./brandDns.js";
 
 const originalFetch = globalThis.fetch;
 const proxyDispatchers = new Map();
@@ -309,6 +310,18 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   const connectionProxyUrl = resolveConnectionProxyUrl(targetUrl, proxyOptions);
   const envProxyUrl = connectionProxyUrl ? null : normalizeProxyUrl(getEnvProxyUrl(targetUrl));
   const proxyUrl = connectionProxyUrl || envProxyUrl;
+
+  // Brand hosts (CodeBuddy / WorkBuddy): their CDN flips the A record between
+  // the real address and the blackhole 0.0.0.1 per resolver, and this machine's
+  // resolver is one that catches the blackhole — every brand call then dies as
+  // `fetch failed` / ConnectTimeoutError (the device flow reported it as
+  // "9router: no device code for codebuddy-intl"). With no proxy to resolve DNS
+  // remotely, pin the socket to an address public resolvers vouch for; see
+  // brandDns.js. Only the address is pinned — TLS still verifies the URL host.
+  if (!proxyUrl && isBrandHostUrl(targetUrl)) {
+    const dispatcher = await getBrandDispatcher();
+    if (dispatcher) return originalFetch(url, { ...options, dispatcher });
+  }
 
   // MITM DNS bypass: for known MITM-intercepted hosts, resolve real IP to avoid DNS spoof
   if (shouldBypassMitmDns(targetUrl)) {
