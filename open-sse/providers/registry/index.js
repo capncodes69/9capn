@@ -136,6 +136,10 @@ import p132 from "./v1m.js";
 import p133 from "./muse.js";
 import p134 from "./capnzed.js";
 import p135 from "./camber.js";
+import p137 from "./minimax-code.js";
+import p138 from "./minimax-code-global.js";
+import p139 from "./bedrock.js";
+import p140 from "./bedrock-xai.js";
 export default [
   p0,
   p1,
@@ -272,4 +276,8 @@ export default [
   p133,
   p134,
   p135,
+  p137,
+  p138,
+  p139,
+  p140,
 ];

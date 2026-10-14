@@ -32,6 +32,8 @@ import zed from "./zed.js";
 import capnzed from "./capnzed.js";
 import camber from "./camber.js";
 import glm from "./glm.js";
+import minimaxCode from "./minimax-code.js";
+import minimaxCodeGlobal from "./minimax-code-global.js";
 
 // Provider configurations
 const PROVIDERS = {
@@ -63,6 +65,8 @@ const PROVIDERS = {
   capnzed,
   camber,
   glm,
+  "minimax-code": minimaxCode,
+  "minimax-code-global": minimaxCodeGlobal,
 };
 
 export { PROVIDERS };
