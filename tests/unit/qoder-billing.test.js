@@ -1,9 +1,11 @@
 /**
  * Unit tests for qoder billing error detection.
  *
- * Ensures that billing blocks (code 112, 10605, pricingUrl) are detected
- * on the first SSE frame and returned as 403 responses so chatCore can
- * mark the connection unavailable and trigger combo failover.
+ * Ensures that billing blocks (code 110, 112, pricingUrl) are detected on the
+ * first SSE frame and returned as 403 responses so chatCore can mark the
+ * connection unavailable and trigger combo failover. Code 10605 (model queued)
+ * is NOT billing — it is a transient queue signal surfaced as a retryable 429
+ * (see qoder-queue.test.js).
  */
 
 import { describe, it, expect } from "vitest";
@@ -17,9 +19,9 @@ describe("isBillingBlock", () => {
     expect(isBillingBlock(msg)).toBe(true);
   });
 
-  it("detects code 10605 (queue throttle)", () => {
+  it("does not treat code 10605 (model queued) as billing", () => {
     const msg = '{"code":"10605","message":"Queue limit"}';
-    expect(isBillingBlock(msg)).toBe(true);
+    expect(isBillingBlock(msg)).toBe(false);
   });
 
   it("detects pricingUrl field", () => {
@@ -69,17 +71,18 @@ describe("wrapQoderSSE billing detection", () => {
     expect(json.error.message).toContain("112");
   });
 
-  it("returns 403 response when first frame is billing block (code 10605)", async () => {
-    const billingEnv = JSON.stringify({
-      statusCodeValue: 429,
-      body: '{"code":"10605","message":"Queue limit"}',
+  it("surfaces code 10605 as a retryable 429 (queue), not a 403 quota lock", async () => {
+    const queueEnv = JSON.stringify({
+      statusCodeValue: 403,
+      body: '{"code":"10605","message":"Queue limit","retryAfterSeconds":30}',
     });
-    const upstream = `data: ${billingEnv}\n\n`;
+    const upstream = `data: ${queueEnv}\n\n`;
 
     const wrapped = await wrapQoderSSE(makeResponse([upstream]), "qoder/ultimate");
 
-    expect(wrapped.status).toBe(403);
+    expect(wrapped.status).toBe(429);
     expect(wrapped.ok).toBe(false);
+    expect(wrapped.headers.get("retry-after")).toBe("30");
   });
 
   it("returns 403 response when first frame is billing block (code 110 string)", async () => {
