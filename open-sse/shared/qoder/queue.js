@@ -29,7 +29,12 @@ export const QODER_MODEL_QUEUE_MAX_WAIT_ENV = "QODER_MODEL_QUEUE_MAX_WAIT_MS";
 
 // qodercli: VrE = 3600000 (max wait), crE = 30000 (default retry interval),
 // brE = 500 (floor), KrE = 30000 (cap).
-const DEFAULT_MAX_WAIT_MS = 3_600_000;
+//
+// We deliberately do NOT inherit qodercli's 1h default: the queue clears in
+// ~30s windows, so a gateway that holds the caller for an hour is worse than
+// one that gives up and reports a retryable error. 3 minutes covers several
+// windows; raise it with QODER_MODEL_QUEUE_MAX_WAIT_MS if a client can wait.
+const DEFAULT_MAX_WAIT_MS = 180_000;
 const DEFAULT_RETRY_MS = 30_000;
 const MIN_RETRY_MS = 500;
 const MAX_RETRY_MS = 30_000;
@@ -163,12 +168,41 @@ export function computeQoderQueueDelayMs(info) {
 }
 
 /**
- * Max total time to hold a request open waiting for a queued model. Mirrors
- * qodercli's `QODER_MODEL_QUEUE_MAX_WAIT_MS` (default 1h).
+ * Max total time to hold a request open waiting for a queued model.
+ * Overridable through `QODER_MODEL_QUEUE_MAX_WAIT_MS` (qodercli's env name;
+ * see DEFAULT_MAX_WAIT_MS for why our default is not qodercli's 1h).
  */
 export function qoderQueueMaxWaitMs() {
   const raw = process.env[QODER_MODEL_QUEUE_MAX_WAIT_ENV];
   if (raw == null || raw === "") return DEFAULT_MAX_WAIT_MS;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_WAIT_MS;
+}
+
+/**
+ * URL of the model-queue status endpoint qodercli polls (`krE` in the CLI).
+ *
+ * `inferenceBase` is the host root (see qoderInferenceBase) and the endpoint
+ * lives under `/algo`, like the inference endpoint — qodercli logs the
+ * unprefixed contract path, but the gateway 404s that and answers 200 on
+ * `/algo/api/v2/service/ask/queue/status` (verified against the live API).
+ * `requestSetId` is the queue key and must be the same `request_set_id` the
+ * inference body carried.
+ */
+export function qoderQueueStatusUrl(inferenceBase, { requestSetId, modelKey, queueType } = {}) {
+  const params = new URLSearchParams();
+  if (requestSetId) params.set("requestSetId", String(requestSetId));
+  if (modelKey) params.set("modelKey", String(modelKey));
+  if (queueType) params.set("queueType", String(queueType));
+  return `${inferenceBase}/algo/api/v2/service/ask/queue/status?${params}`;
+}
+
+/**
+ * Parse a queue-status response. The endpoint answers with a flat object
+ * (`{isQueued, serviceAvailable, waitTime, retryAfterSeconds, ...}`), but it is
+ * occasionally wrapped, so this reuses the nested-tolerant extractor. Returns
+ * null when the body carries no queue signal.
+ */
+export function parseQoderQueueStatus(body) {
+  return parseQoderQueueInfo(body);
 }

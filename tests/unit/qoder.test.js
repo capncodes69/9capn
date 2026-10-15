@@ -224,14 +224,24 @@ describe("buildCosyHeaders", () => {
     expect(headers["Cosy-Machinetoken"]).toBe("fixed-machine-id");
   });
 
-  it("auto-generates a machineId when none is supplied", () => {
-    const headers = buildCosyHeaders(Buffer.alloc(0), QODER_MODEL_LIST_URL, {
-      ...creds,
-      machineId: "",
-    });
-    expect(headers["Cosy-Machineid"]).toMatch(
+  it("derives a stable machineId from the userId when none is supplied", () => {
+    // qodercli persists one machine id per install and the server tracks
+    // per-client queue state by it, so a missing machine id must not become a
+    // brand-new device on every request.
+    const first = buildCosyHeaders(Buffer.alloc(0), QODER_MODEL_LIST_URL, { ...creds, machineId: "" });
+    const second = buildCosyHeaders(Buffer.alloc(0), QODER_MODEL_LIST_URL, { ...creds, machineId: "" });
+    expect(first["Cosy-Machineid"]).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
+    expect(first["Cosy-Machineid"]).toBe(second["Cosy-Machineid"]);
+    expect(first["Cosy-Machinetoken"]).toBe(first["Cosy-Machineid"]);
+
+    const other = buildCosyHeaders(Buffer.alloc(0), QODER_MODEL_LIST_URL, {
+      ...creds,
+      userId: "a-different-user",
+      machineId: "",
+    });
+    expect(other["Cosy-Machineid"]).not.toBe(first["Cosy-Machineid"]);
   });
 
   it("throws when userId is missing", () => {

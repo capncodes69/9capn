@@ -55,7 +55,9 @@ import {
   computeQoderQueueDelayMs,
   isQoderQueuedBody,
   parseQoderQueueInfo,
+  parseQoderQueueStatus,
   qoderQueueMaxWaitMs,
+  qoderQueueStatusUrl,
 } from "../shared/qoder/queue.js";
 
 /**
@@ -223,7 +225,7 @@ function truncate(s, n) {
 /**
  * Map the OpenAI-style request body into the exact shape Qoder expects.
  */
-async function buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, uploadFn = null, region = "intl" }) {
+async function buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, uploadFn = null, region = "intl", requestId = null }) {
   const qoderKey = String(model || "").replace(/^qoder\//, "");
 
   // Fetch model config from dynamic API instead of relying on static QODER_MODEL_MAP.
@@ -351,7 +353,10 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
   const built = {
     qoderKey,
     payload: {
-      request_id: uuidv4(),
+      // qodercli keeps ONE request_id for the whole model-queue recovery
+      // (attempt 1, queue-status polls, and the post-queue replay all carry
+      // it). Pass a fixed id so replays look like the same request.
+      request_id: requestId || uuidv4(),
       request_set_id: recordId,
       chat_record_id: recordId,
       session_id: sessionId,
@@ -863,16 +868,24 @@ export class QoderExecutor extends BaseExecutor {
       return { response: fakeResp, url, headers: {}, transformedBody: body };
     }
 
+    // One request_id for the entire model-queue recovery, exactly like
+    // qodercli (see buildQoderRequestBody's `requestId`).
+    const recoveryRequestId = uuidv4();
+    // Last payload built by sendOnce — the queue-status endpoint needs the
+    // same request_set_id the inference body carried.
+    let lastPayload = null;
+
     // Build + sign + send one inference attempt. Rebuilt per attempt so the
-    // COSY signature/timestamp and request_id are fresh each time, while the
-    // derived request_set_id/chat_record_id stay stable across queue retries
-    // (buildQoderRequestBody hashes them from the prompt; Qoder correlates
-    // queue state by request_set_id).
+    // COSY signature/timestamp stay fresh, while request_id/request_set_id/
+    // chat_record_id stay stable across queue retries (buildQoderRequestBody
+    // hashes the record ids from the prompt; Qoder correlates queue state by
+    // request_set_id).
     const sendOnce = async () => {
       let qoderKey;
       let payload;
       try {
-        ({ qoderKey, payload } = await buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, region: this.region }));
+        ({ qoderKey, payload } = await buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, region: this.region, requestId: recoveryRequestId }));
+        lastPayload = payload;
       } catch (err) {
         return {
           error: new Response(
@@ -952,15 +965,66 @@ export class QoderExecutor extends BaseExecutor {
 
     const qoderLabel = `${this.provider}/${String(model || "").replace(/^qoder\//, "")}`;
     const maxQueueWaitMs = qoderQueueMaxWaitMs();
-    let queueWaitStartedAt = null;
+    const queueWaitStartedAt = Date.now();
     let lastQueueInfo = null;
+    // Disabled as soon as the status endpoint proves unusable, so a Qoder
+    // deployment without it keeps the old timed-replay behaviour.
+    let statusPollsEnabled = true;
 
-    // Qoder's model queue: a temporarily-unavailable model answers with a
-    // non-200 envelope whose body carries code 10605 / isQueued:true. Rather
-    // than surfacing a hard 403 (which locks the connection for a full
-    // cooldown on a state that clears itself) hold the request open and replay
-    // the inference call once the model is ready — matching qodercli, which
-    // waits out the queue instead of failing. Bounded by QODER_MODEL_QUEUE_MAX_WAIT_MS.
+    /**
+     * Poll the model-queue status endpoint qodercli uses.
+     * Returns { endpointOk, info }: endpointOk=false means "fall back to timed
+     * replays" (endpoint 404s, errors, or answers with an unparseable body).
+     */
+    const fetchQueueStatus = async (modelKey, queueType) => {
+      const statusUrl = qoderQueueStatusUrl(qoderInferenceBase(credentials, this.region), {
+        requestSetId: lastPayload?.request_set_id,
+        modelKey,
+        queueType,
+      });
+      try {
+        const statusResponse = await proxyAwareFetch(
+          statusUrl,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              // qodercli correlates the poll with the original inference via
+              // these two headers.
+              "X-Request-ID": lastPayload?.request_id || recoveryRequestId,
+              "X-Session-ID": lastPayload?.session_id || "",
+              ...buildCosyHeaders(Buffer.alloc(0), statusUrl, {
+                userId: psd.userId,
+                authToken: credentials.accessToken,
+                name: credentials.displayName || "",
+                email: credentials.email || "",
+                machineId: psd.machineId || "",
+              }),
+            },
+            signal,
+          },
+          proxyOptions,
+        );
+        if (!statusResponse.ok) return { endpointOk: false, info: null };
+        const info = parseQoderQueueStatus(await statusResponse.text().catch(() => ""));
+        return info ? { endpointOk: true, info } : { endpointOk: false, info: null };
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        return { endpointOk: false, info: null };
+      }
+    };
+
+    //
+    // Qoder's model queue: while the model is unavailable the inference
+    // endpoint keeps answering with code 10605 / isQueued:true instead of the
+    // completion. qodercli does NOT treat that as fatal and it does not replay
+    // blindly: it polls /api/v2/service/ask/queue/status (keyed by the request
+    // set id) and only replays the inference once that reports isQueued:false,
+    // honouring the server's own retryAfterSeconds hint. The status endpoint is
+    // a cheap GET that does not consume a queue slot, so polling it is far
+    // gentler than re-sending the (multi-KB) inference request every cycle.
+    // Bounded by QODER_MODEL_QUEUE_MAX_WAIT_MS; on exhaustion the caller gets a
+    // retryable response instead of the request hanging forever.
     for (;;) {
       const sent = await sendOnce();
       if (sent.error) {
@@ -978,7 +1042,6 @@ export class QoderExecutor extends BaseExecutor {
       }
 
       lastQueueInfo = detected.queueInfo || lastQueueInfo;
-      if (queueWaitStartedAt === null) queueWaitStartedAt = Date.now();
       const waitedMs = Date.now() - queueWaitStartedAt;
       if (waitedMs >= maxQueueWaitMs) {
         log?.warn?.(
@@ -991,10 +1054,57 @@ export class QoderExecutor extends BaseExecutor {
         };
       }
 
-      const delayMs = Math.min(computeQoderQueueDelayMs(lastQueueInfo), maxQueueWaitMs - waitedMs);
+      const modelKey = lastQueueInfo?.modelKey || sent.qoderKey;
+      let delayInfo = lastQueueInfo;
+      let ready = false;
+
+      if (statusPollsEnabled) {
+        for (;;) {
+          const remaining = maxQueueWaitMs - (Date.now() - queueWaitStartedAt);
+          if (remaining <= 0) break;
+          const { endpointOk, info } = await fetchQueueStatus(modelKey, lastQueueInfo?.queueType);
+          if (!endpointOk) {
+            statusPollsEnabled = false;
+            log?.warn?.("QODER", "qoder model-queue status endpoint unavailable; falling back to timed replays");
+            break;
+          }
+          delayInfo = info || delayInfo;
+          if (info.isQueued === false) {
+            ready = true;
+            break;
+          }
+          // Still queued: wait out the server's hint, then poll again.
+          const sleepMs = Math.min(computeQoderQueueDelayMs(info), maxQueueWaitMs - (Date.now() - queueWaitStartedAt));
+          if (sleepMs <= 0) break;
+          log?.info?.(
+            "QODER",
+            `model "${modelKey}" still queued (queueType=${delayInfo?.queueType ?? "?"}, queueCount=${delayInfo?.queueCount ?? "?"}, serviceAvailable=${delayInfo?.serviceAvailable ?? "?"}); rechecking queue status in ${Math.round(sleepMs / 1000)}s`,
+          );
+          await sleepAbortable(sleepMs, signal);
+        }
+      }
+
+      const remainingMs = maxQueueWaitMs - (Date.now() - queueWaitStartedAt);
+      if (remainingMs <= 0) {
+        const waited = Date.now() - queueWaitStartedAt;
+        log?.warn?.(
+          "QODER",
+          `model queue wait timed out after ${Math.round(waited / 1000)}s (${qoderLabel}, queueType=${delayInfo?.queueType ?? "?"}, serviceAvailable=${delayInfo?.serviceAvailable ?? "?"})`,
+        );
+        return {
+          response: buildQoderQueueTimeoutResponse(sent.qoderKey, delayInfo, waited, maxQueueWaitMs),
+          url: sent.url, headers: sent.headers, transformedBody: sent.transformedBody,
+        };
+      }
+
+      // When the server reports the model ready, honour the retry hint that
+      // came with that ready response (qodercli waits it out before replaying).
+      const delayMs = Math.min(computeQoderQueueDelayMs(delayInfo), remainingMs);
       log?.info?.(
         "QODER",
-        `model "${sent.qoderKey}" queued (queueType=${lastQueueInfo?.queueType ?? "?"}, queueCount=${lastQueueInfo?.queueCount ?? "?"}, serviceAvailable=${lastQueueInfo?.serviceAvailable ?? "?"}); waiting ${Math.round(delayMs / 1000)}s then retrying`,
+        ready
+          ? `model "${modelKey}" ready (queueType=${delayInfo?.queueType ?? "?"}, serviceAvailable=${delayInfo?.serviceAvailable ?? "?"}); retrying in ${Math.round(delayMs / 1000)}s`
+          : `model "${sent.qoderKey}" queued (queueType=${delayInfo?.queueType ?? "?"}, queueCount=${delayInfo?.queueCount ?? "?"}, serviceAvailable=${delayInfo?.serviceAvailable ?? "?"}); waiting ${Math.round(delayMs / 1000)}s then retrying`,
       );
       await sleepAbortable(delayMs, signal);
     }

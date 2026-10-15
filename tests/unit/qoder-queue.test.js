@@ -15,7 +15,9 @@ import {
   computeQoderQueueDelayMs,
   isQoderQueuedBody,
   parseQoderQueueInfo,
+  parseQoderQueueStatus,
   qoderQueueMaxWaitMs,
+  qoderQueueStatusUrl,
 } from "../../open-sse/shared/qoder/queue.js";
 
 // The exact nested shape observed from api3.qoder.sh (queueType p3, 30s wait).
@@ -114,15 +116,55 @@ describe("computeQoderQueueDelayMs", () => {
 });
 
 describe("qoderQueueMaxWaitMs", () => {
-  it("defaults to one hour", () => {
-    expect(qoderQueueMaxWaitMs()).toBe(3_600_000);
+  it("defaults to three minutes (not qodercli's one hour)", () => {
+    expect(qoderQueueMaxWaitMs()).toBe(180_000);
   });
 
   it("honours the env override and ignores invalid values", () => {
     process.env[QODER_MODEL_QUEUE_MAX_WAIT_ENV] = "45000";
     expect(qoderQueueMaxWaitMs()).toBe(45000);
     process.env[QODER_MODEL_QUEUE_MAX_WAIT_ENV] = "nonsense";
-    expect(qoderQueueMaxWaitMs()).toBe(3_600_000);
+    expect(qoderQueueMaxWaitMs()).toBe(180_000);
+  });
+});
+
+describe("qoderQueueStatusUrl", () => {
+  it("builds the live-endpoint path (under /algo) with the queue key", () => {
+    const url = qoderQueueStatusUrl("https://api2.qoder.sh", {
+      requestSetId: "rs-1",
+      modelKey: "auto",
+      queueType: "p3",
+    });
+    expect(url).toBe(
+      "https://api2.qoder.sh/algo/api/v2/service/ask/queue/status?requestSetId=rs-1&modelKey=auto&queueType=p3",
+    );
+  });
+
+  it("omits optional query parameters when absent", () => {
+    expect(qoderQueueStatusUrl("https://api3.qoder.sh", { requestSetId: "rs-2" })).toBe(
+      "https://api3.qoder.sh/algo/api/v2/service/ask/queue/status?requestSetId=rs-2",
+    );
+  });
+});
+
+describe("parseQoderQueueStatus", () => {
+  it("reads the flat ready response the endpoint returns", () => {
+    const info = parseQoderQueueStatus(
+      '{"isQueued":false,"modelKey":"auto","queueType":"p3","queueCount":0,"waitTime":0,"retryAfterSeconds":2,"serviceAvailable":true}',
+    );
+    expect(info).toMatchObject({ isQueued: false, serviceAvailable: true, retryAfterSeconds: 2 });
+  });
+
+  it("reads a still-queued response", () => {
+    const info = parseQoderQueueStatus(
+      '{"subCode":"RESOURCE_LIMIT","isQueued":true,"modelKey":"auto","queueType":"p3","queueCount":0,"waitTime":30,"retryAfterSeconds":30,"serviceAvailable":false}',
+    );
+    expect(info).toMatchObject({ isQueued: true, serviceAvailable: false, waitTime: 30 });
+  });
+
+  it("returns null for a body without queue fields", () => {
+    expect(parseQoderQueueStatus("<html>404</html>")).toBeNull();
+    expect(parseQoderQueueStatus('{"ok":true}')).toBeNull();
   });
 });
 
