@@ -16,7 +16,7 @@ import { trackPendingRequest, appendRequestLog, saveRequestDetail } from "@/lib/
 import { getExecutor } from "../executors/index.js";
 import { supportsGrokCliReasoningEffort } from "../config/grokCli.js";
 import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDetail.js";
-import { buildProxyOptions, checkProxyRequirement } from "./chatCore/proxyGuard.js";
+import { buildProxyOptions } from "./chatCore/proxyGuard.js";
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
@@ -345,14 +345,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   });
 
   const proxyOptions = buildProxyOptions(provider, credentials?.providerSpecificData || {});
-
-  // Freebuff egresses through a proxy it owns: a direct request (or a silent
-  // fallback to direct) gets the real IP rate-limited into "limited mode".
-  const proxyRequirement = checkProxyRequirement(provider, model, proxyOptions);
-  if (proxyRequirement) {
-    trackPendingRequest(model, provider, connectionId, false, true);
-    return createErrorResult(proxyRequirement.status, proxyRequirement.message);
-  }
 
   if (proxyOptions.vercelRelayUrl) {
     const connectionName = credentials?.connectionName || credentials?.connectionId || "unknown";

@@ -348,10 +348,10 @@ function loadDaysInRange(adapter, maxDays) {
 /**
  * Sum what a provider's own requests have cost, from the local ledger.
  *
- * Exists for providers that meter you in dollars but expose no balance endpoint
- * (CapnZed's Zed trial is a fixed $-credit): the recorded `cost` column is the
- * only signal available. `cost` is priced at write time from
- * open-sse/providers/pricing.js, so treat the result as an estimate.
+ * Exists for providers that meter you in dollars but expose no balance endpoint:
+ * the recorded `cost` column is the only signal available. `cost` is priced at
+ * write time from open-sse/providers/pricing.js, so treat the result as an
+ * estimate.
  *
  * @param {{ provider?: string, connectionId?: string|null, since?: string|Date|number|null }} filter
  * @returns {Promise<{costUsd:number, requests:number, firstAt:string|null, lastAt:string|null}>}

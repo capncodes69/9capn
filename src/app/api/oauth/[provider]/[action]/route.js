@@ -42,14 +42,11 @@ import {
   clearXiaomiMimoSession,
 } from "@/lib/oauth/utils/server";
 import { detectIdeInstalled } from "@/lib/oauth/utils/ideDetect";
-import { ZED_HOSTED_CONFIG, CAPNZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
+import { ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
 
-// Zed and CapnZed speak the same RSA native-app transport; they differ only in
-// provider id and preferred callback port. Keep both on the same code path so a
-// fix to one applies to the other.
+// Zed speaks the RSA native-app transport.
 const ZED_FAMILY = {
   zed: ZED_HOSTED_CONFIG.defaultNativeAppPort,
-  capnzed: CAPNZED_HOSTED_CONFIG.defaultNativeAppPort,
 };
 const isZedFamily = (provider) => Object.prototype.hasOwnProperty.call(ZED_FAMILY, provider);
 
@@ -284,9 +281,6 @@ export async function GET(request, { params }) {
         "qoder",
         "qoder-cn",
         "grok-cli",
-        "freebuff",
-        // Camber rolls its own session id (/auth/initiate) and needs no PKCE.
-        "camber",
         "muse",
         "glm",
         "nous",
@@ -336,7 +330,7 @@ export async function POST(request, { params }) {
       if (provider === "trae") ok = registerTraeSession({ state });
       else if (provider === "windsurf") ok = registerWindsurfSession({ state });
       else if (isZedFamily(provider)) ok = registerZedSession({ state, codeVerifier: body?.codeVerifier, provider, systemId: body?.systemId });
-      else return NextResponse.json({ error: "register-session only supported for trae/windsurf/zed/capnzed" }, { status: 400 });
+      else return NextResponse.json({ error: "register-session only supported for trae/windsurf/zed" }, { status: 400 });
       return NextResponse.json({ success: ok });
     }
 
@@ -405,7 +399,7 @@ export async function POST(request, { params }) {
         }
       }
 
-      // Zed/CapnZed: RSA native-app callback. Unlike the browser flow (where the
+      // Zed: RSA native-app callback. Unlike the browser flow (where the
       // local proxy in utils/server.js exchanges the callback itself), this is the
       // manual-paste path — and it is the ONLY path that works when 9router runs
       // remotely, because the browser cannot reach the server's 127.0.0.1 listener.
@@ -587,10 +581,6 @@ export async function POST(request, { params }) {
           return NextResponse.json({ error: "Missing code verifier" }, { status: 400 });
         }
         result = await pollForToken(provider, deviceCode, codeVerifier, extraData);
-      } else if (provider === "camber") {
-        // Camber identifies the session by the id /auth/initiate returned, so no
-        // verifier is involved.
-        result = await pollForToken(provider, deviceCode, null, extraData);
       } else {
         // Qwen and other PKCE providers
         if (!codeVerifier) {

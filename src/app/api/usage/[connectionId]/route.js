@@ -2,12 +2,7 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
-import { getProviderSpend } from "@/lib/usageDb";
 import { getUsageForProvider } from "open-sse/services/usage.js";
-import { applyCapnZedSpend } from "open-sse/services/usage/capnzed.js";
-import { CAPNZED_PROVIDER_ID } from "open-sse/shared/capnzedAuth.js";
-import { applyCamberMessageCount } from "open-sse/services/usage/camber.js";
-import { CAMBER_PROVIDER_ID } from "open-sse/shared/camberCatalog.js";
 import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
@@ -133,46 +128,6 @@ export async function refreshAndUpdateCredentials(connection, force = false, pro
 }
 
 /**
- * CapnZed shows a dollar allowance (Zed's trial credit) but the provider exposes
- * no balance endpoint, so the only spend signal is 9capn's own ledger. Window the
- * sum to the trial so a long-lived connection's older history can't leak into a
- * fresh trial's meter. Estimation only — see applyCapnZedSpend.
- */
-async function withCapnZedLocalSpend(connection, usage) {
-  if (!usage || typeof usage !== "object") return usage;
-
-  const windowStartMs = usage.trialStartedAtMs ?? usage.periodStartedAtMs ?? null;
-  const spend = await getProviderSpend({
-    provider: CAPNZED_PROVIDER_ID,
-    connectionId: connection.id,
-    since: windowStartMs ? new Date(windowStartMs) : null,
-  });
-
-  return applyCapnZedSpend(usage, spend);
-}
-
-/**
- * Camber meters usage server-side (`llm_messages`, plus CPU/GPU hours and
- * storage) but only for a web session: the CLI credential a connection holds
- * gets 401 from /api/credit-usage/me, and /api/cli/me returns identity only.
- * So the one number this card can own is 9capn's own tally — one request served
- * is one LLM message, which is Camber's unit too — windowed to the period the
- * connection reports. Estimation only; see applyCamberMessageCount.
- */
-async function withCamberLocalMessages(connection, usage) {
-  if (!usage || typeof usage !== "object") return usage;
-
-  const since = usage.windowStartMs ? new Date(usage.windowStartMs) : null;
-  const { requests } = await getProviderSpend({
-    provider: CAMBER_PROVIDER_ID,
-    connectionId: connection.id,
-    since,
-  });
-
-  return applyCamberMessageCount(usage, { requests });
-}
-
-/**
  * GET /api/usage/[connectionId] - Get usage data for a specific connection
  */
 export async function GET(request, { params }) {
@@ -243,14 +198,6 @@ export async function GET(request, { params }) {
       } catch (retryError) {
         console.warn(`[Usage] ${connection.provider}: force refresh failed: ${retryError.message}`);
       }
-    }
-
-    if (connection.provider === CAPNZED_PROVIDER_ID) {
-      usage = await withCapnZedLocalSpend(connection, usage);
-    }
-
-    if (connection.provider === CAMBER_PROVIDER_ID) {
-      usage = await withCamberLocalMessages(connection, usage);
     }
 
     return Response.json(usage);

@@ -2,7 +2,6 @@ import { getProviderConnections, validateApiKey, updateProviderConnection, getSe
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
-import { CAPNZED_MAX_LOCK_MS } from "open-sse/shared/capnzedAuth.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
 import * as log from "../utils/logger.js";
@@ -13,9 +12,7 @@ let selectionMutex = Promise.resolve();
 /**
  * Optional per-provider pinning of accounts to a single model. Off unless the
  * provider strategy sets `strictModelAssignment`, in which case only accounts
- * explicitly assigned to the requested model are eligible. `freebuff` stores
- * its assignment under `freebuffModel` (one session = one model there), other
- * providers under `assignedModel`.
+ * explicitly assigned to the requested model are eligible.
  */
 export function filterConnectionsForModel(providerId, connections, model, settings = {}) {
   const override = (settings.providerStrategies || {})[providerId] || {};
@@ -23,8 +20,7 @@ export function filterConnectionsForModel(providerId, connections, model, settin
     return connections;
   }
   return connections.filter((connection) => {
-    const assignedModel = connection.providerSpecificData?.assignedModel
-      || (providerId === "freebuff" ? connection.providerSpecificData?.freebuffModel : null);
+    const assignedModel = connection.providerSpecificData?.assignedModel;
     return assignedModel === model;
   });
 }
@@ -268,17 +264,6 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
  * @param {string|null} model - The specific model that triggered the error
  * @returns {{ shouldFallback: boolean, cooldownMs: number }}
  */
-/**
- * CapnZed accounts are metered as a whole, so a reported lock must cover every
- * model. Every CapnZed-originated error is prefixed with "CapnZed:" and carries
- * a `capnzed_*` code (see open-sse/executors/capnzed.js::parseError).
- */
-function isCapnZedAccountWideError(provider, errorText) {
-  if (resolveProviderId(provider) !== "capnzed") return false;
-  const text = typeof errorText === "string" ? errorText : "";
-  return /capnzed_|CapnZed:/i.test(text);
-}
-
 export async function markAccountUnavailable(connectionId, status, errorText, provider = null, model = null, resetsAtMs = null) {
   if (!connectionId || connectionId === "noauth") return { shouldFallback: false, cooldownMs: 0 };
   const connections = await getProviderConnections({ provider });
@@ -297,19 +282,10 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   } else if (resetsAtMs && resetsAtMs > Date.now()) {
     shouldFallback = true;
     // Antigravity quota API provides exact per-model resetAt. Do not truncate it.
-    // Freebucks exhaustion is likewise a hard stop until the daily Pacific
-    // reset (up to ~24h) — skip the account for the day rather than re-poke it
-    // every 30 min; guard at 26h so a bad server value can't lock forever.
-    // CapnZed: a spent Zed trial never refills within its window, so honour the
-    // full trial end (up to ~31d) instead of re-poking the account every 30min.
     const cooldownProviderId = resolveProviderId(provider);
     cooldownMs = cooldownProviderId === "antigravity"
       ? resetsAtMs - Date.now()
-      : cooldownProviderId === "capnzed"
-        ? Math.min(resetsAtMs - Date.now(), CAPNZED_MAX_LOCK_MS)
-        : cooldownProviderId === "freebuff"
-          ? Math.min(resetsAtMs - Date.now(), 26 * 60 * 60 * 1000)
-          : Math.min(resetsAtMs - Date.now(), MAX_RATE_LIMIT_COOLDOWN_MS);
+      : Math.min(resetsAtMs - Date.now(), MAX_RATE_LIMIT_COOLDOWN_MS);
     newBackoffLevel = 0;
   } else {
     ({ shouldFallback, cooldownMs, newBackoffLevel } = checkFallbackError(status, errorText, backoffLevel, resolveProviderId(provider)));
@@ -317,11 +293,8 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
   const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
-  // CapnZed meters the trial per ACCOUNT, not per model ($5 of hosted-model
-  // credit), so an exhausted account must lock every model at once — otherwise
-  // the next request picks the same account for a different model and 402s again.
-  const capnzedAccountWide = isCapnZedAccountWideError(provider, errorText);
-  const lockUpdate = buildModelLockUpdate(githubResetAtMs || capnzedAccountWide ? null : model, cooldownMs);
+  // GitHub premium-request exhaustion locks every model at once.
+  const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
 
   await updateProviderConnection(connectionId, {
     ...lockUpdate,

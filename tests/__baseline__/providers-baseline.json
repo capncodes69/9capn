@@ -1101,26 +1101,6 @@
     },
     "format": "openai"
   },
-  "freebuff": {
-    "baseUrl": "https://www.codebuff.com/api/v1/chat/completions",
-    "format": "openai",
-    "headers": {
-      "User-Agent": "ai-sdk/openai-compatible/1.0/codebuff"
-    },
-    "retry": {
-      "429": {
-        "attempts": 2,
-        "delayMs": 2000
-      },
-      "503": {
-        "attempts": 2,
-        "delayMs": 1500
-      }
-    },
-    "usage": {
-      "url": "https://www.codebuff.com/api/v1/freebuff/session"
-    }
-  },
   "tokenharbor": {
     "baseUrl": "https://tokenharbor.ai/v1/chat/completions",
     "validateUrl": "https://tokenharbor.ai/v1/models",
@@ -1190,40 +1170,6 @@
         }
       }
     ]
-  },
-  "capnzed": {
-    "baseUrl": "https://cloud.zed.dev/completions",
-    "format": "openai",
-    "forceStream": true,
-    "headers": {
-      "content-type": "application/json"
-    },
-    "auth": {
-      "combined": true,
-      "header": "Authorization",
-      "scheme": "<user_id> <access_token>"
-    },
-    "usage": {
-      "url": "https://cloud.zed.dev/client/users/me"
-    },
-    "modelsUrl": "https://cloud.zed.dev/models"
-  },
-  "camber": {
-    "baseUrl": "https://api-v2.cambercloud.com/api/cli/chat",
-    "format": "openai",
-    "forceStream": true,
-    "headers": {
-      "content-type": "application/json"
-    },
-    "timeoutMs": 300000,
-    "stallTimeoutMs": 300000,
-    "auth": {
-      "header": "Authorization",
-      "scheme": "Bearer <api-key>"
-    },
-    "usage": {
-      "url": "https://api-v2.cambercloud.com/api/cli/me"
-    }
   },
   "minimax-code": {
     "baseUrl": "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",

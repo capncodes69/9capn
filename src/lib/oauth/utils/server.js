@@ -663,8 +663,8 @@ export function registerZedSession({ state, codeVerifier, provider = "zed", syst
 export function getZedSessionStatus(state, provider = null) {
   if (!zedSession) return null;
   if (state && zedSession.state !== state) return null;
-  // The listener is a singleton, so guard against answering a poll for the other
-  // member of the Zed family (zed vs capnzed) that happens to share the state.
+  // The listener is a singleton, so guard against answering a poll for a
+  // different provider that happens to share the state.
   if (provider && zedSession.provider && zedSession.provider !== provider) return null;
   return zedSession;
 }

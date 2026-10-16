@@ -4,9 +4,6 @@ import { useState } from "react";
 import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
-// Catalog, NOT camberAuth: this is a client component and the wire layer
-// reaches proxyFetch (see open-sse/AGENTS.md → Pitfalls).
-import { CAMBER_PLAN_LIMITS } from "open-sse/shared/camberCatalog.js";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
@@ -23,10 +20,6 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
   const isAzure = provider === "azure";
   const isCloudflareAi = provider === "cloudflare-ai";
-  // Camber is an agent platform: the key is an API credential and the AGENT is
-  // what the conversation actually runs. It has no catalog endpoint, so the
-  // agent cannot be a dropdown — it is a free-text alias defaulting to nova.cli.
-  const isCamber = provider === "camber";
   // Capability, not identity: gating this on `provider === "bedrock"` left bedrock-xai with no
   // way to enter a profile at all, which is the same mistake as hardcoding the API-key exemption.
   const usesAwsCredentialForm =
@@ -52,10 +45,6 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     organization: "",
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
-  const [camberAgent, setCamberAgent] = useState("");
-  const [camberPlan, setCamberPlan] = useState("");
-  const [camberMessageLimit, setCamberMessageLimit] = useState("");
-  const [camberPeriodStart, setCamberPeriodStart] = useState("");
   const [bedrockData, setBedrockData] = useState({
     profile: "",
     region: "",
@@ -90,22 +79,6 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     }
     if (isCloudflareAi) {
       return { accountId: cloudflareData.accountId };
-    }
-    if (isCamber) {
-      // Empty means "pin no agent": the field is omitted and Camber's own
-      // orchestrator picks one. Pinning `nova.cli` here is what used to make the
-      // model answer as a Camber CLI instead of a local coding assistant.
-      const data = {};
-      const pinnedAgent = (camberAgent || "").trim().replace(/^@/, "");
-      if (pinnedAgent) data.camberAgent = pinnedAgent;
-      // Optional meter config. Camber's own quota is not readable with a CLI
-      // key, so the dashboard counts 9capn's requests instead — and a count only
-      // becomes a progress bar once it has a denominator.
-      if (camberPlan) data.camberPlan = camberPlan;
-      const limit = Number(camberMessageLimit);
-      if (Number.isFinite(limit) && limit > 0) data.camberMessageLimit = Math.round(limit);
-      if (camberPeriodStart) data.camberPeriodStart = camberPeriodStart;
-      return data;
     }
     if (usesAwsCredentialForm) {
       // Only send what the user filled in: an empty `profile` would otherwise select profile
@@ -381,80 +354,6 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           <p className="text-xs text-text-muted">
             Enter the model ID exactly as your compatible endpoint expects it. This model will be saved as the connection default.
           </p>
-        )}
-        {isCamber && (
-          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
-            <h3 className="font-semibold mb-3 text-sm">Camber Agent (optional)</h3>
-            <Input
-              label="Agent"
-              value={camberAgent}
-              onChange={(e) => setCamberAgent(e.target.value)}
-              placeholder="leave empty — Camber chooses"
-            />
-            <p className="text-xs text-text-muted mt-2">
-              Every Camber conversation is agent-mediated, so <em>something</em> always
-              runs. Leave this empty and Camber&apos;s own orchestrator picks the agent
-              per request. Pin an alias (e.g. <code>yourname.my_agent</code>, without
-              the leading <code>@</code>) only when you specifically want that
-              agent&apos;s tools and skills.
-            </p>
-            <p className="text-xs text-text-muted mt-2">
-              Avoid pinning the CLI agent <code>nova.cli</code> for coding clients: it
-              answers as the Camber CLI and looks for files in a Camber sandbox rather
-              than in your editor.
-            </p>
-            <p className="text-xs text-text-muted mt-2">
-              The API key is the token <code>camber login</code> prints, or the one in
-              your Camber account settings.
-            </p>
-            <p className="text-xs text-amber-500 mt-2">
-              Camber agents run inside Camber&apos;s own sandbox and cannot read or edit
-              files on this machine — they work in a hosted notebook and return results
-              through Camber Stash. Connection only for chat and analysis; local coding
-              needs a provider that exposes the model with your own tools.
-            </p>
-          </div>
-        )}
-        {isCamber && (
-          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
-            <h3 className="font-semibold mb-3 text-sm">Usage meter (optional)</h3>
-            <Select
-              label="Plan"
-              value={camberPlan}
-              onChange={(e) => setCamberPlan(e.target.value)}
-              options={[
-                { value: "", label: "Not set — show the count without a bar" },
-                ...Object.entries(CAMBER_PLAN_LIMITS).map(([id, plan]) => ({
-                  value: id,
-                  label: `${plan.label} — ${plan.llmMessages} messages/month`,
-                })),
-              ]}
-            />
-            <div className="mt-3">
-              <Input
-                label="Message limit (overrides the plan)"
-                value={camberMessageLimit}
-                onChange={(e) => setCamberMessageLimit(e.target.value)}
-                placeholder="e.g. 500"
-              />
-            </div>
-            <div className="mt-3">
-              <Input
-                label="Period start"
-                type="date"
-                value={camberPeriodStart}
-                onChange={(e) => setCamberPeriodStart(e.target.value)}
-              />
-            </div>
-            <p className="text-xs text-text-muted mt-2">
-              Camber meters <code>llm_messages</code> server-side, but only for a web
-              session — a CLI key cannot read it. The dashboard therefore counts the
-              requests 9capn served through this connection (one request = one message),
-              and only draws a bar when a limit is set here. A Pro trial often grants
-              more messages than paid Pro (500 vs 200), so an explicit limit wins.
-              Without a period start the count covers the current calendar month.
-            </p>
-          </div>
         )}
         {isCloudflareAi && (
           <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">

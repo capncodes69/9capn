@@ -7,12 +7,12 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 // Providers using the dynamic-port local callback proxy.
 // Browser OAuth: popup → auto callback → auto exchange → poll-status.
-const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf", "zed", "capnzed"]);
+const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf", "zed"]);
 
 // Zed's RSA native-app flow: the callback is a 127.0.0.1 URL carrying
 // user_id + access_token, so it can only be auto-consumed when 9router runs on
 // the same machine as the browser.
-const ZED_FAMILY_PROVIDERS = new Set(["zed", "capnzed"]);
+const ZED_FAMILY_PROVIDERS = new Set(["zed"]);
 
 // Providers offering a paste-token fallback (import-token flow).
 // UX warns if the IDE (which issues the token) is not installed.
@@ -296,10 +296,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         "qoder",
         "qoder-cn",
         "grok-cli",
-        "freebuff",
-        // Camber: session id from /auth/initiate, no user code to type — the
-        // login URL is opened and the poll does the rest (qoder-shaped panel).
-        "camber",
         "muse",
         "glm",
         "minimax-code",
@@ -694,7 +690,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           body: JSON.stringify({
             code: input,
             state: authData?.state,
-            // Zed / capnzed manual fallback needs the same attempt material as
+            // Zed manual fallback needs the same attempt material as
             // the automatic path (redirectUri + RSA verifier + system_id). The
             // private key is normally resolved from the registered session
             // server-side; sending it as well keeps a paste working if that
@@ -777,7 +773,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
       <div className="flex flex-col gap-4">
         {/* Trae/Windsurf: browser OAuth (proxy) + paste-token fallback.
-            zed/capnzed: browser OAuth (proxy) + callback-URL paste — they have no
+            zed: browser OAuth (proxy) + callback-URL paste — it has no
             token to paste, only the RSA callback the local listener would have
             consumed. */}
         {PROXY_OAUTH_PROVIDERS.has(provider) && (step === "waiting" || step === "input" || step === "error") && (
@@ -809,7 +805,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                     <span className="text-sm">Waiting for browser authorization…</span>
                   </div>
                 )}
-                {/* zed/capnzed only: the sign-in URL is worth showing because the
+                {/* zed only: the sign-in URL is worth showing because the
                     popup is unusable when 9router runs anywhere but this machine. */}
                 {ZED_FAMILY_PROVIDERS.has(provider) && authData?.authUrl && (
                   <div>
@@ -976,7 +972,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                   </Button>
                 </div>
               </div>
-              {/* Providers with no user code (camber — authorisation happens on the
+              {/* Providers with no user code (authorisation happens on the
                   page itself; codebuddy) must not render an empty box. */}
               {deviceData.user_code && (
                 <div className="bg-primary/10 p-4 rounded-lg">

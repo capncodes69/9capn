@@ -21,8 +21,6 @@ vi.mock("@/lib/usageDb", () => ({
 vi.mock("open-sse/services/usage.js", () => ({
   getUsageForProvider: mocks.getUsageForProvider,
 }));
-vi.mock("open-sse/services/usage/capnzed.js", () => ({ applyCapnZedSpend: (u) => u }));
-vi.mock("open-sse/services/usage/camber.js", () => ({ applyCamberMessageCount: (u) => u }));
 vi.mock("open-sse/executors/index.js", () => ({
   getExecutor: vi.fn(() => ({ needsRefresh: () => false })),
 }));

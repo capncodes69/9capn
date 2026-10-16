@@ -684,27 +684,6 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
-      case "freebuff":
-        // Session quotas keyed by model id — label rows with the friendly
-        // displayName (from the registry) and keep modelKey for ordering.
-        // Metered rows carry the live Freebucks price (price) + promo tagline
-        // (priceNote), both server-authoritative.
-        if (data.quotas) {
-          Object.entries(data.quotas).forEach(([modelKey, quota]) => {
-            normalizedQuotas.push({
-              name: quota.displayName || modelKey,
-              modelKey,
-              used: quota.used || 0,
-              total: quota.total || 0,
-              resetAt: quota.resetAt || null,
-              recurring: quota.recurring !== false,
-              price: quota.price,
-              priceNote: quota.priceNote,
-            });
-          });
-        }
-        break;
-
       case "kimi":
         // Weekly / Ratelimit from /v1/usages. Prefer remainingPercentage only.
         if (data.quotas) {
@@ -779,49 +758,6 @@ export function parseQuotaData(provider, data) {
               total: quota.total || 0,
               resetAt: quota.resetAt || null,
               remainingPercentage: quota.remainingPercentage,
-            });
-          });
-        }
-        break;
-
-      case "capnzed":
-        // Trial meter: an absolute $-credit (unit "USD") plus a day-window row.
-        // Both carry an explicit remainingPercentage — a spend meter runs the
-        // opposite direction to a request counter (same reason as Vercel's
-        // balance row) — and the credit is one-shot, so forward recurring:false
-        // to word resetAt as "expires in".
-        if (data.quotas) {
-          Object.entries(data.quotas).forEach(([name, quota]) => {
-            normalizedQuotas.push({
-              name,
-              used: quota.used || 0,
-              total: quota.total || 0,
-              resetAt: quota.resetAt || null,
-              remainingPercentage: quota.remainingPercentage,
-              unit: quota.unit,
-              unlimited: quota.unlimited,
-              recurring: quota.recurring !== false,
-            });
-          });
-        }
-        break;
-
-      case "camber":
-        // One row, and only when a limit is configured: 9capn's own request
-        // count (one request = one LLM message, Camber's unit) against the plan
-        // grant. The generic fallback drops remainingPercentage, and a monthly
-        // grant refills, so recurring stays true unless the window is pinned.
-        if (data.quotas) {
-          Object.entries(data.quotas).forEach(([name, quota]) => {
-            normalizedQuotas.push({
-              name,
-              used: quota.used || 0,
-              total: quota.total || 0,
-              resetAt: quota.resetAt || null,
-              remainingPercentage: quota.remainingPercentage,
-              unit: quota.unit,
-              unlimited: quota.unlimited,
-              recurring: quota.recurring !== false,
             });
           });
         }

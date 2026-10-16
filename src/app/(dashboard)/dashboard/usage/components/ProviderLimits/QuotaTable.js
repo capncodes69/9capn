@@ -41,8 +41,8 @@ function formatResetTimeDisplay(resetTime) {
 
 /**
  * Quota rows are normally counts. A row that declares a currency unit holds
- * absolute money (CapnZed's trial credit), so render it as such instead of
- * passing a bare number to toLocaleString().
+ * absolute money, so render it as such instead of passing a bare number to
+ * toLocaleString().
  */
 function formatAmount(value, unit) {
   const amount = Number(value) || 0;

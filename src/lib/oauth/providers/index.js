@@ -8,7 +8,6 @@ import claude from "./claude.js";
 import codex from "./codex.js";
 import xai from "./xai.js";
 import grokCli from "./grok-cli.js";
-import freebuff from "./freebuff.js";
 import muse from "./muse.js";
 import geminiCli from "./gemini-cli.js";
 import antigravity from "./antigravity.js";
@@ -29,8 +28,6 @@ import kimchi from "./kimchi.js";
 import trae from "./trae.js";
 import windsurf from "./windsurf.js";
 import zed from "./zed.js";
-import capnzed from "./capnzed.js";
-import camber from "./camber.js";
 import glm from "./glm.js";
 import minimaxCode from "./minimax-code.js";
 import minimaxCodeGlobal from "./minimax-code-global.js";
@@ -51,7 +48,6 @@ const PROVIDERS = {
   github,
   kiro,
   cursor,
-  freebuff,
   kimi,
   kilocode,
   cline,
@@ -63,8 +59,6 @@ const PROVIDERS = {
   trae,
   windsurf,
   zed,
-  capnzed,
-  camber,
   glm,
   "minimax-code": minimaxCode,
   "minimax-code-global": minimaxCodeGlobal,

@@ -127,9 +127,6 @@ export const KIMCHI_CONFIG = { ...PROVIDER_OAUTH["kimchi"] };
 // Endpoint: cli-chat-proxy.grok.com — same client_id as xai, different flow + scopes
 export const GROK_CLI_CONFIG = { ...PROVIDER_OAUTH["grok-cli"] };
 
-// Freebuff OAuth Configuration (Device Code Flow)
-export const FREEBUFF_CONFIG = { ...PROVIDER_OAUTH["freebuff"] };
-
 // Muse — subscription device code flow to auth.meta.com, no refresh
 // (Meta rejects refresh_token grants; the minted Model API key never expires).
 export const MUSE_CONFIG = { ...PROVIDER_OAUTH["muse"] };
@@ -225,29 +222,6 @@ export const ZED_HOSTED_CONFIG = {
   llmBaseUrl: "https://cloud.zed.dev",
   defaultNativeAppPort: 58443,
   oauthTimeoutMs: 600_000,
-};
-
-// CapnZed — 9capn's own Zed trial provider. Same RSA native-app transport as
-// ZED_HOSTED_CONFIG (same hosts, same callback port), kept separate so the two
-// providers can be configured and reasoned about independently.
-export const CAPNZED_HOSTED_CONFIG = {
-  webBaseUrl: "https://zed.dev",
-  cloudBaseUrl: "https://cloud.zed.dev",
-  llmBaseUrl: "https://cloud.zed.dev",
-  defaultNativeAppPort: 58444,
-  oauthTimeoutMs: 600_000,
-};
-
-// Camber — browser login via the platform's own CLI auth endpoints (device-flow
-// shaped, no PKCE and no client secret). The user authorises on the web page and
-// we poll /auth/poll until the API key comes back. Hosts default here so the
-// config still resolves if the registry entry is unavailable.
-export const CAMBER_CONFIG = {
-  apiBaseUrl: "https://api-v2.cambercloud.com/api/cli",
-  webBaseUrl: "https://app.cambercloud.com",
-  loginPath: "/auth-cli",
-  pollIntervalSeconds: 5,
-  ...PROVIDER_OAUTH["camber"],
 };
 
 // Nous Research Portal — OAuth 2.0 Device Code flow (RFC 8628) + agent key minting

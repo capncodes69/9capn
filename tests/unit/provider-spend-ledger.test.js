@@ -1,7 +1,7 @@
-// getProviderSpend is the ledger read behind CapnZed's trial meter: it must sum
-// only the provider's own rows, only this connection's, and only inside the
-// window it is given. Runs against a real (temp) SQLite DB because the SQL is
-// the thing under test.
+// getProviderSpend is the ledger read that backs a local-estimate meter: it must
+// sum only the provider's own rows, only this connection's, and only inside the
+// window it is given. Runs against a real (temp) SQLite DB because the SQL is the
+// thing under test.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,21 +33,21 @@ const ROW_COST = 7;
 describe("getProviderSpend", () => {
   beforeAll(async () => {
     await db.saveRequestUsage({
-      provider: "capnzed",
+      provider: "test-provider",
       model: "gpt-5.6-luna",
       connectionId: "conn-a",
       timestamp: "2026-09-11T00:00:00.000Z",
       tokens: TOKENS,
     });
     await db.saveRequestUsage({
-      provider: "capnzed",
+      provider: "test-provider",
       model: "gpt-5.6-luna",
       connectionId: "conn-a",
       timestamp: "2026-09-01T00:00:00.000Z", // before the trial window
       tokens: TOKENS,
     });
     await db.saveRequestUsage({
-      provider: "capnzed",
+      provider: "test-provider",
       model: "gpt-5.6-luna",
       connectionId: "conn-b", // a second account on the same provider
       timestamp: "2026-09-12T00:00:00.000Z",
@@ -63,20 +63,20 @@ describe("getProviderSpend", () => {
   });
 
   it("prices each row from the local pricing table", async () => {
-    const spend = await db.getProviderSpend({ provider: "capnzed" });
+    const spend = await db.getProviderSpend({ provider: "test-provider" });
     expect(spend.requests).toBe(3);
     expect(spend.costUsd).toBeCloseTo(3 * ROW_COST, 6);
   });
 
   it("scopes to one connection", async () => {
-    const spend = await db.getProviderSpend({ provider: "capnzed", connectionId: "conn-a" });
+    const spend = await db.getProviderSpend({ provider: "test-provider", connectionId: "conn-a" });
     expect(spend.requests).toBe(2);
     expect(spend.costUsd).toBeCloseTo(2 * ROW_COST, 6);
   });
 
   it("scopes to the window and reports its bounds", async () => {
     const spend = await db.getProviderSpend({
-      provider: "capnzed",
+      provider: "test-provider",
       connectionId: "conn-a",
       since: "2026-09-10T00:00:00.000Z",
     });
