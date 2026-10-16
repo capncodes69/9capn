@@ -29,7 +29,7 @@
     ],
     "format": "antigravity",
     "headers": {
-      "User-Agent": "antigravity/ide/2.11.0 darwin/arm64"
+      "User-Agent": "antigravity/ide/2.22.0 darwin/arm64"
     },
     "retry": {
       "429": {
@@ -1280,5 +1280,16 @@
       "scheme": "raw"
     },
     "format": "openai"
+  },
+  "nous": {
+    "baseUrl": "https://inference-api.nousresearch.com/v1/chat/completions",
+    "format": "openai",
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer"
+    },
+    "clientId": "hermes-cli",
+    "tokenUrl": "https://portal.nousresearch.com/api/oauth/token"
   }
 }

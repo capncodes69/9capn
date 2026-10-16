@@ -23,6 +23,7 @@ import { getZedUsage } from "./usage/zed.js";
 import { getCapnZedUsage } from "./usage/capnzed.js";
 import { getCamberUsage } from "./usage/camber.js";
 import { getXiaomiMimoUsage } from "./usage/xiaomi-mimo.js";
+import { getCursorUsage } from "./usage/cursor.js";
 import { resolveQoderCredentials } from "./qoderModels.js";
 import { getGlmUsage } from "./usage/glm.js";
 import { getCommandCodeUsage } from "./usage/commandcode.js";
@@ -74,6 +75,7 @@ const USAGE_HANDLERS = {
   camber: (c) => getCamberUsage(c.accessToken, c.providerSpecificData, c.proxyOptions, c.apiKey),
   "xiaomi-mimo": (c) => getXiaomiMimoUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
   commandcode: (c) => getCommandCodeUsage(c.apiKey, c.proxyOptions),
+  cursor: (c) => getCursorUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
 };
 
 // Qoder intl/CN share one usage path: PATs must be exchanged to a job token

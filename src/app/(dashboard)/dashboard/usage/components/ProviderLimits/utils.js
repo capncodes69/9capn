@@ -557,8 +557,10 @@ export function parseQuotaData(provider, data) {
         // quota and an `addon` one (campaign rewards — qoder.com's "Bonus
         // Credits (Total: N)" pack). A bucket the account does not hold reads
         // total 0 and must be skipped, or most personal accounts get a
-        // misleading "0/0" bar; the `user` plan row is kept either way, since
-        // a free account legitimately has nothing there and should say so.
+        // misleading "0/0" bar; `personal_standard` accounts report `user` as
+        // 0/0 too (their grant lives in the add-on bucket), but the `user` plan
+        // row is kept either way — a free account legitimately has nothing
+        // there and should say so.
         // Don't forward Qoder's `remaining` field: it's an absolute credit
         // count, but getRemainingPercentage / QuotaTable interpret
         // `remaining` as a 0-100 percentage and would render 348 credits
@@ -592,6 +594,13 @@ export function parseQuotaData(provider, data) {
               unit: quota.unit,
               resetAt: quota.resetAt || null,
               recurring: quota.recurring !== false,
+              // Qoder reports open-ended plans as a 9999 sentinel; the service
+              // turns that into neverExpires so the row can read "Never
+              // expires" instead of "N/A" or a year-9999 date. Add-on rows
+              // carry `detailUrl` — a link to Qoder's own usage page, which
+              // lists per-grant deadlines that this API does not expose.
+              neverExpires: quota.neverExpires === true,
+              detailUrl: quota.detailUrl || null,
             });
           });
         }
@@ -723,6 +732,22 @@ export function parseQuotaData(provider, data) {
               remainingPercentage: quota.remainingPercentage,
               isCreditBalance: quota.isCreditBalance ?? true,
               currency: quota.currency || (name.includes("(") ? name.slice(name.indexOf("(") + 1, name.indexOf(")")) : "USD"),
+            });
+          });
+        }
+        break;
+
+      case "cursor":
+        // Plan spend is USD (cents from GetCurrentPeriodUsage). Forward
+        // remainingPercentage only — do not pass absolute remaining (UI treats it as %).
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              remainingPercentage: quota.remainingPercentage,
             });
           });
         }

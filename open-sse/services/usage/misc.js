@@ -255,13 +255,26 @@ export async function getQoderUsage(accessToken, proxyOptions = null, providerId
     // siblings so the dashboard parser doesn't try to render them as rows.
     const userQuota = body.userQuota || {};
     const orgQuota = body.orgResourcePackage || {};
+    // Add-on credits (free grants / promos). Qoder emits this block only when
+    // the account actually holds a grant — an account that never redeemed one,
+    // or consumed it, omits the key entirely. Verified against both regions:
+    // qoder CN returns it (e.g. 2200 total) after redeeming the free-credit
+    // promo, while an intl account without a grant has no such key. Gating on
+    // total > 0 keeps the intl/no-grant shape byte-identical to before.
+    const addOnQuota = body.addOnQuota || {};
+    const addOnTotal = Number(addOnQuota.total) || 0;
     // Qoder publishes a single absolute reset timestamp (`expiresAt` in ms);
     // surface it on every quota record as ISO so the table can render
-    // "resets at" alongside used/total.
+    // "resets at" alongside used/total. 253402214400000 (9999-12-31T00:00:00Z)
+    // is Qoder's "never expires" sentinel, returned by both regions for
+    // open-ended plans — rendering a reset date in the year 9999 is noise, so
+    // flag it instead and let the tracker word it as "Never expires".
     const expiresAtMs = Number.isFinite(Number(body.expiresAt)) && Number(body.expiresAt) > 0
       ? Number(body.expiresAt)
       : null;
-    const resetAt = expiresAtMs ? new Date(expiresAtMs).toISOString() : null;
+    const NO_RESET_SENTINEL_MS = 253402214400000;
+    const neverExpires = expiresAtMs === NO_RESET_SENTINEL_MS;
+    const resetAt = expiresAtMs && !neverExpires ? new Date(expiresAtMs).toISOString() : null;
     const quotas = {
       user: {
         total: Number(userQuota.total) || 0,
@@ -269,6 +282,7 @@ export async function getQoderUsage(accessToken, proxyOptions = null, providerId
         remaining: Number(userQuota.remaining) || 0,
         unit: userQuota.unit || "credits",
         resetAt,
+        neverExpires,
       },
       organization: {
         total: Number(orgQuota.total) || 0,
@@ -276,46 +290,38 @@ export async function getQoderUsage(accessToken, proxyOptions = null, providerId
         remaining: Number(orgQuota.remaining) || 0,
         unit: orgQuota.unit || "credits",
         resetAt,
+        neverExpires,
       },
     };
     // Add-on credits — where campaign rewards land. qoder.com labels the bucket
-    // "Add-on Credits" and each grant a "Bonus Credits (Total: N)" pack, and it
-    // is kept deliberately OUT of the plan quota above (a spent trial still
-    // holds its bonus). The same response that carries `userQuota` carries this,
-    // so the row costs no extra request; Qoder omits the key entirely on an
-    // account that never claimed one (verified absent, not zero) and that must
-    // render no row rather than a 0/0 bar — the zero check below is the
-    // belt-and-braces half of that.
+    // "Add-on Credits" and each grant a "Bonus Credits (Total: N)" pack, kept
+    // deliberately OUT of the plan quota above (a spent trial still holds its
+    // bonus). The same response that carries `userQuota` carries this, so the
+    // row costs no extra request; Qoder omits the key entirely on an account
+    // that never claimed one (verified absent, not zero) and that must render
+    // no row rather than a 0/0 bar — hence the gating below.
     //
-    // `recurring: false` and no `resetAt`: a pack is a one-shot grant with its
-    // own expiry date, which this payload does not carry — the `expiresAt`
-    // above is the *plan's* reset, so stamping it here would claim the bonus
-    // refills whenever the plan does.
-    //
-    // `packs` is the one thing about the *number* of rewards that is
-    // recoverable here. docs.qoder.com/events/100credits: claimed Credits
-    // accumulate ("claim 100 today and use 20, then claim another 100 tomorrow,
-    // you will have 180 across the two rewards") and each is "valid for 30 days
-    // from its own claim date"; every grant this account can receive is 100
-    // (campaign `benefit.amount`), so the aggregate divides into whole packs.
-    // The per-pack list — what qoder.com's Usage page renders as "Bonus Credits
-    // (Total: 100) … Expires on Oct 20, 2026" — is NOT on this surface: it comes
-    // from qoder.com's session route `/api/v2/me/usages/big_model_credits`, which
-    // answers 401 to a PAT or job token (the path is real, the credential is the
-    // wrong kind), and no token-surface route carries a pack date (measured: the
-    // /api/v2, /sash and center equivalents are 404, and `Cosy-ClientType` 1-20
-    // changes nothing). So: report the count, never a date that cannot be read.
-    const addOnQuota = body.addOnQuota || {};
-    const addOnTotal = Number(addOnQuota.total) || 0;
+    // `packs` is the recoverable count: docs.qoder.com/events/100credits says
+    // claimed Credits accumulate and every grant this account can receive is
+    // 100 (campaign `benefit.amount`), so the aggregate divides into whole
+    // packs. The per-pack list (with its own expiry) is NOT on this surface —
+    // it lives behind qoder.com's session route and answers 401 to a PAT — so
+    // report the count and link out (`detailUrl`) rather than fabricate a date.
     if (addOnTotal > 0) {
       quotas.addon = {
         total: addOnTotal,
         used: Number(addOnQuota.used) || 0,
         remaining: Number(addOnQuota.remaining) || 0,
         unit: addOnQuota.unit || "credits",
+        // A pack is a one-shot grant: `resetAt` stays null and `neverExpires`
+        // false — the account-level `expiresAt` above describes the plan, not
+        // the grants, and reusing it would claim the bonus refills with the
+        // plan. Per-grant deadlines live on Qoder's usage page (`detailUrl`).
         resetAt: null,
+        neverExpires: false,
         recurring: false,
         packs: addOnTotal % 100 === 0 ? addOnTotal / 100 : 1,
+        detailUrl: addOnQuota.detailUrl || null,
       };
     }
     return {

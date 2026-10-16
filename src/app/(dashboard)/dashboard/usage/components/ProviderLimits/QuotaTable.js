@@ -166,8 +166,20 @@ export default function QuotaTable({
           const colors = isCreditBalance
             ? { text: "text-blue-600 dark:text-blue-400", bg: "bg-blue-500", bgLight: "bg-blue-500/10", emoji: "💰" }
             : getColorClasses(quota.remaining);
-          const countdown = formatResetTime(quota.resetAt);
-          const resetDisplay = formatResetTimeDisplay(quota.resetAt);
+          // Qoder flags open-ended plans with `neverExpires` (its API reports a
+          // year-9999 sentinel). Return "-"/"Never expires" rather than an empty
+          // countdown: the render below branches on `countdown !== "-"`, so an
+          // empty string would fall through to the "in " label.
+          const countdown = quota.neverExpires ? "-" : formatResetTime(quota.resetAt);
+          // Providers that expose a detail page but no per-bucket reset date
+          // (Qoder add-on grants) get a pointer to it instead of a bare "N/A".
+          const seeDetails = !quota.neverExpires && !quota.resetAt && Boolean(quota.detailUrl);
+          const resetDisplay = quota.neverExpires
+            ? "Never expires"
+            : seeDetails
+              ? "See details"
+              : formatResetTimeDisplay(quota.resetAt);
+          const resetSecondaryText = seeDetails && quota.detailUrl ? quota.detailUrl : resetDisplay;
           // recurring defaults true: a missing flag means the quota
           // refreshes at resetAt. Bonus/one-shot packs set recurring:false
           // and their resetAt is a hard expiry, so word it as "expires".
@@ -179,6 +191,25 @@ export default function QuotaTable({
             : isCreditBalance
               ? `Credit balance: ${quota.total.toFixed(2)} ${quota.currency || ""}`
               : `${usedLabel} / ${quota.total > 0 ? formatAmount(quota.total, quota.unit) : "∞"}`;
+
+          // "See details" rows are a link to the provider's own usage page —
+          // used where the API exposes no per-bucket date (Qoder add-on grants).
+          const renderResetCell = (className) =>
+            seeDetails ? (
+              <a
+                href={quota.detailUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${className} inline-flex items-center gap-0.5 hover:text-text-primary hover:underline`}
+                title={`Open usage details: ${resetSecondaryText}`}
+                aria-label={`Open usage details for ${quota.name}`}
+              >
+                {resetDisplay}
+                <span className="material-symbols-outlined text-[12px]">open_in_new</span>
+              </a>
+            ) : (
+              resetDisplay
+            );
 
           return (
             <div
@@ -222,9 +253,9 @@ export default function QuotaTable({
                   compact ? (
                     <div
                       className={`${resetPrimary} text-text-primary font-medium truncate`}
-                      title={resetDisplay || ""}
+                      title={resetSecondaryText || ""}
                     >
-                      {countdown !== "-" ? countdownLabel : resetDisplay}
+                      {countdown !== "-" ? countdownLabel : renderResetCell(resetPrimary)}
                     </div>
                   ) : (
                     <div className="min-w-0 space-y-0.5">
@@ -235,7 +266,7 @@ export default function QuotaTable({
                       )}
                       {resetDisplay && (
                         <div className={`${resetSecondary} text-text-muted truncate`}>
-                          {resetDisplay}
+                          {renderResetCell(resetSecondary)}
                         </div>
                       )}
                     </div>
