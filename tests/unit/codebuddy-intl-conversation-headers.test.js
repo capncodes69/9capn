@@ -113,3 +113,171 @@ describe("caller-supplied ids are preserved", () => {
     expect(out["X-Conversation-ID"]).toMatch(UUID_RE);
   });
 });
+
+// HTTP header names are case-insensitive. A caller that already sent a
+// lowercase key must be recognised, or a second key is added and undici joins
+// both into one comma-separated value — corrupting the id the caller supplied.
+describe("header lookup is case-insensitive", () => {
+  const url = "https://www.codebuddy.ai/v2/chat/completions";
+  const body = { messages: [{ role: "user", content: "hi" }] };
+
+  it("does not duplicate a caller's lowercase conversation id", () => {
+    const out = withConversationHeaders({ "x-conversation-id": "caller-lower" }, url, body);
+    const idKeys = Object.keys(out).filter((k) => k.toLowerCase() === "x-conversation-id");
+    expect(idKeys).toHaveLength(1);
+    expect(out["x-conversation-id"]).toBe("caller-lower");
+  });
+
+  it("does not duplicate a caller's mixed-case message id", () => {
+    const out = withConversationHeaders({ "X-Conversation-Message-Id": "caller-mixed" }, url, body);
+    const msgKeys = Object.keys(out).filter((k) => k.toLowerCase() === "x-conversation-message-id");
+    expect(msgKeys).toHaveLength(1);
+    // X-Request-ID mirrors the caller's message id, not a fresh one
+    expect(out["X-Request-ID"]).toBe("caller-mixed");
+  });
+
+  it("recognises a lowercase X-Request-ID when mirroring", () => {
+    const out = withConversationHeaders({ "x-request-id": "caller-trace" }, url, body);
+    expect(out["x-request-id"]).toBe("caller-trace");
+    expect(out["X-Conversation-Message-ID"]).toBe("caller-trace");
+  });
+
+  it("never produces two keys for one header name", () => {
+    const out = withConversationHeaders(
+      {
+        "x-conversation-id": "a",
+        "X-CONVERSATION-REQUEST-ID": "b",
+        "X-Conversation-Message-Id": "c",
+      },
+      url,
+      body,
+    );
+    for (const name of [
+      "x-conversation-id",
+      "x-conversation-request-id",
+      "x-conversation-message-id",
+      "x-request-id",
+    ]) {
+      const matching = Object.keys(out).filter((k) => k.toLowerCase() === name);
+      expect(matching.length, `${name} appears ${matching.length}x`).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+// The three-header family is the measured minimum: any two of them are still
+// answered 11128 by the live gateway. This test fails if someone trims the
+// family down to a pair.
+describe("the full three-header family is always sent", () => {
+  const exec = new CodeBuddyIntlExecutor();
+  const creds = { accessToken: "***" };
+  const urls = [
+    "https://www.codebuddy.ai/v2/chat/completions",
+    "https://www.workbuddy.ai/v2/chat/completions",
+  ];
+
+  for (const url of urls) {
+    it(`sets all three on ${new URL(url).hostname}, even with an empty body`, () => {
+      const h = exec.buildHeaders(creds, true, url, "m", undefined);
+      expect(h["X-Conversation-ID"]).toBeTruthy();
+      expect(h["X-Conversation-Request-ID"]).toBeTruthy();
+      expect(h["X-Conversation-Message-ID"]).toBeTruthy();
+    });
+  }
+
+  it("still sends all three when the caller supplied only one", () => {
+    const h = exec.buildHeaders(creds, true, urls[0], "m", {
+      messages: [{ role: "user", content: "hi" }],
+    });
+    h["X-Conversation-ID"] = "caller-id";
+    const again = withConversationHeaders(
+      { ...h },
+      urls[0],
+      { messages: [{ role: "user", content: "hi" }] },
+    );
+    expect(again["X-Conversation-ID"]).toBe("caller-id");
+    expect(again["X-Conversation-Request-ID"]).toBeTruthy();
+    expect(again["X-Conversation-Message-ID"]).toBeTruthy();
+  });
+
+  it("tolerates a null body without throwing", () => {
+    const h = exec.buildHeaders(creds, true, urls[0], "m", null);
+    expect(h["X-Conversation-ID"]).toMatch(UUID_RE);
+  });
+
+  it("does not throw on a missing or null header bag", () => {
+    for (const bag of [undefined, null]) {
+      expect(() => withConversationHeaders(bag, urls[0], null)).not.toThrow();
+    }
+  });
+
+  it("fills a fetch Headers instance instead of adding plain properties", () => {
+    const h = new Headers({ "x-conversation-id": "caller-lower" });
+    const out = withConversationHeaders(h, urls[0], { messages: [{ role: "user", content: "hi" }] });
+    // get() is case-insensitive on a Headers instance, so the caller's value wins
+    expect(out.get("X-Conversation-ID")).toBe("caller-lower");
+    expect(out.get("X-Conversation-Request-ID")).toBeTruthy();
+    expect(out.get("X-Conversation-Message-ID")).toBeTruthy();
+    // and no stray plain property was attached
+    expect(out["X-Conversation-ID"]).toBeUndefined();
+  });
+});
+
+// An operator header override is merged over the executor's headers AFTER
+// buildHeaders (base.js, Object.assign). That merge is key-exact, so an
+// override whose casing differs from the canonical name adds a SECOND key, and
+// undici then joins the two into one comma-separated value. This is a real
+// hazard of the merge site, not of withConversationHeaders — pinned here so the
+// behaviour is documented rather than discovered in production.
+describe("case-insensitive reads survive a key-exact override merge", () => {
+  const url = "https://www.codebuddy.ai/v2/chat/completions";
+  const body = { messages: [{ role: "user", content: "hi" }] };
+
+  it("still reads the canonical id when an override adds a lowercase twin", () => {
+    const merged = withConversationHeaders({}, url, body);
+    const canonical = merged["X-Conversation-ID"];
+    // simulate base.js: Object.assign(headers, providerOverrides.headers)
+    Object.assign(merged, { "x-conversation-id": "operator-value" });
+
+    // The executor's own reads are case-insensitive, so a later pass still sees
+    // a value (the first match wins) instead of concluding the header is absent.
+    const idKeys = Object.keys(merged).filter((k) => k.toLowerCase() === "x-conversation-id");
+    expect(idKeys.length).toBe(2); // documents the merge-site hazard
+    expect(merged["X-Conversation-ID"]).toBe(canonical);
+
+    // Re-running the family over the merged headers must not throw and must not
+    // add a third key.
+    const again = withConversationHeaders(merged, url, body);
+    const idKeysAgain = Object.keys(again).filter((k) => k.toLowerCase() === "x-conversation-id");
+    expect(idKeysAgain.length).toBe(2);
+  });
+});
+
+describe("parseError classifies the 11128 variants", () => {
+  const exec = new CodeBuddyIntlExecutor();
+  const res = (status = 400) => ({ status });
+
+  it("names channel verification for the conversation-id variant", () => {
+    const body = JSON.stringify({
+      code: 11128,
+      msg: "conversation id missing",
+      displayTips: { en: "This call failed channel verification" },
+    });
+    const out = exec.parseError(res(), body);
+    expect(out.status).toBe(400);
+    expect(out.message).toMatch(/channel verification/i);
+    expect(out.message).toMatch(/X-Conversation/);
+  });
+
+  it("does NOT claim channel verification for the system-prompt variant", () => {
+    const body = JSON.stringify({ code: 11128, msg: "first message is not system prompt" });
+    const out = exec.parseError(res(), body);
+    expect(out.message).not.toMatch(/channel verification/i);
+  });
+
+  it("still maps the frequency-limit code to 429", () => {
+    const body = JSON.stringify({ code: 6004, msg: "超出频率限制 2026-10-16 10:00:00 UTC+8" });
+    const out = exec.parseError(res(429), body);
+    expect(out.status).toBe(429);
+    expect(out.resetsAtMs).toBeGreaterThan(0);
+  });
+});

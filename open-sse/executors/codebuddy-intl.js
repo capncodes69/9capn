@@ -56,11 +56,48 @@ function isWorkBuddyHost(url) {
   }
 }
 
+// Read a header case-insensitively. HTTP header names are case-insensitive, so a
+// caller that already sent `x-conversation-id` must be found — testing the exact
+// key would miss it, add a second `X-Conversation-ID`, and undici would then join
+// both into one comma-separated value ("caller, ours"), silently corrupting the
+// id we are supposed to keep stable. Accepts a plain object (the executor path)
+// or a fetch `Headers` instance (whose get/set are already case-insensitive).
+// A non-object input is treated as "no headers" rather than throwing: the caller
+// is a header bag, and a missing one means there is nothing to preserve.
+function readConversationHeader(headers, name) {
+  if (typeof headers?.get === "function") {
+    const value = headers.get(name);
+    return typeof value === "string" ? value.trim() : "";
+  }
+  if (!headers || typeof headers !== "object") return "";
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+  const value = key ? headers[key] : undefined;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// Write a header, updating the caller's existing key when only the case differs
+// rather than adding a duplicate.
+function writeConversationHeader(headers, name, value) {
+  if (typeof headers?.set === "function") {
+    headers.set(name, value);
+    return;
+  }
+  if (!headers || typeof headers !== "object") return;
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+  headers[key || name] = value;
+}
+
 /**
  * Attach the conversation-correlation family the gateway's channel
  * verification demands (HTTP 400 code 11128 "conversation id missing" without
  * it). Values that already exist and are non-empty are preserved, so a caller
  * tracking its own conversation keeps it; blank values count as absent.
+ *
+ * **All three of `X-Conversation-ID`, `X-Conversation-Request-ID` and
+ * `X-Conversation-Message-ID` are required** — measured against the live
+ * gateway, any two of them are still answered `11128`. `X-Request-ID` is NOT
+ * part of the requirement; it is mirrored from the message id because the
+ * official client sends it, and dropping it is not known to break anything.
  *
  * - `X-Conversation-ID`: derived stably from the session key (or the opening
  *   user message), so retries of a turn and later turns of one conversation
@@ -73,7 +110,6 @@ function isWorkBuddyHost(url) {
  * intl executor grows these headers — codebuddy-cn is not gated.
  */
 export function withConversationHeaders(headers, url, body = null) {
-  const has = (name) => typeof headers[name] === "string" && headers[name].trim() !== "";
   const workbuddy = isWorkBuddyHost(url);
   const freshCallId = () => (workbuddy ? uuidV7().replace(/-/g, "") : randomUUID());
 
@@ -95,24 +131,27 @@ export function withConversationHeaders(headers, url, body = null) {
         : "";
   const conversationKey = sessionKey || (userText ? `cbai:${userText}` : null);
 
-  if (!has("X-Conversation-ID")) {
-    headers["X-Conversation-ID"] = conversationKey
+  if (!readConversationHeader(headers, "X-Conversation-ID")) {
+    writeConversationHeader(headers, "X-Conversation-ID", conversationKey
       ? stableUuidFrom(conversationKey)
       : workbuddy
         ? uuidV7()
-        : randomUUID();
+        : randomUUID());
   }
-  if (!has("X-Conversation-Request-ID")) {
-    headers["X-Conversation-Request-ID"] = freshCallId();
+  if (!readConversationHeader(headers, "X-Conversation-Request-ID")) {
+    writeConversationHeader(headers, "X-Conversation-Request-ID", freshCallId());
   }
   // The request id mirrors the message id: reuse whichever side already exists.
-  const messageId = has("X-Conversation-Message-ID")
-    ? headers["X-Conversation-Message-ID"]
-    : has("X-Request-ID")
-      ? headers["X-Request-ID"]
-      : freshCallId();
-  if (!has("X-Conversation-Message-ID")) headers["X-Conversation-Message-ID"] = messageId;
-  if (!has("X-Request-ID")) headers["X-Request-ID"] = messageId;
+  const messageId =
+    readConversationHeader(headers, "X-Conversation-Message-ID") ||
+    readConversationHeader(headers, "X-Request-ID") ||
+    freshCallId();
+  if (!readConversationHeader(headers, "X-Conversation-Message-ID")) {
+    writeConversationHeader(headers, "X-Conversation-Message-ID", messageId);
+  }
+  if (!readConversationHeader(headers, "X-Request-ID")) {
+    writeConversationHeader(headers, "X-Request-ID", messageId);
+  }
 
   return headers;
 }
@@ -180,6 +219,28 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
             status: 429,
             message: msg || "CodeBuddy frequency limit (6004)",
             resetsAtMs,
+          };
+        }
+
+        // code 11128 is overloaded: it also carries "first message is not system
+        // prompt" (a body-shape problem fixed in transformRequest). Only the
+        // conversation-id variant is channel verification, so branch on the
+        // message, never on the code alone.
+        if (data?.code === 11128 && /conversation id missing/i.test(msg)) {
+          const tip = data?.displayTips?.en || data?.displayMsg?.en || "";
+          // The gateway added this gate on 2026-10-15 and every cbai/* model
+          // failed 100% of requests until the X-Conversation-* family was sent.
+          // Surface it as its own message: without it the failure reads as a
+          // generic 400 and the cause has to be rediscovered from scratch.
+          return {
+            status: 400,
+            message:
+              "CodeBuddy channel verification failed (11128 \"conversation id missing\"): "
+              + "the upstream gateway requires the X-Conversation-* header family the official "
+              + "IDE sends. CodeBuddyIntlExecutor.buildHeaders() supplies it — if this appears, "
+              + "the gate likely changed (e.g. a new required header) and the family in "
+              + "open-sse/executors/codebuddy-intl.js needs re-measuring against the live gateway."
+              + (tip ? ` Upstream said: ${tip}` : ""),
           };
         }
       } catch {}
