@@ -1,74 +1,83 @@
 /**
- * 9router 每日签到 —— 各 provider 的**纯协议实现层**。
+ * 9router daily check-in — the **pure protocol implementation layer** for each provider.
  *
- * ## 这个模块是什么
+ * ## What this module is
  *
- * 「自动签到」在 9router 上是**新增能力**（上游 v0.5.99 全仓无任何 checkin 实现，
- * 见 `docs/checkin-feature.md` 的调研结论）。本文件只做一件事：给定 provider 名 +
- * 该 provider 的一条连接凭据，发上游请求并返回一个**归一化的结果**。
- * 它**不碰数据库、不碰调度、不发任何 UI**，因此可以直接用 `node` 单文件跑测试
- * （这正是它能被逐 provider 取证的原因）。
+ * "Automatic check-in" is a **new capability** on 9router (upstream v0.5.99 has no checkin
+ * implementation anywhere in the repo; see the research conclusions in
+ * `docs/checkin-feature.md`). This file does exactly one thing: given a provider name plus
+ * one connection credential for that provider, it sends the upstream request and returns a
+ * **normalized result**. It **does not touch the database, does not touch scheduling, and
+ * does not emit any UI**, so it can be tested directly as a single file with `node` (which
+ * is exactly why it can be verified provider by provider).
  *
- * ## ⚠️ 实现判据（判错的代价是「静默漏签」）
+ * ## ⚠️ Implementation criteria (getting them wrong costs you "silent missed check-ins")
  *
- * 1. **幂等判据一律在响应体，绝不在 HTTP 状态码。**
- *    codebuddy 重复领取返回 **HTTP 400** + `{code:10001}`；只看状态码会把
- *    「今天已签」误报成**失败**（进而被重试、甚至被当成凭据问题）。
- *    已实测：7 个真实账号全部走到这条分支。
+ * 1. **Idempotency criteria always live in the response body, never in the HTTP status code.**
+ *    codebuddy returns **HTTP 400** + `{code:10001}` for a duplicate claim; looking only at
+ *    the status code misreports "already checked in today" as a **failure** (which then gets
+ *    retried, or even treated as a credential problem).
+ *    Measured: all 7 real accounts hit this branch.
  *
- * 2. **不要用 `response.json()`。**
- *    凭据失效时腾讯网关回的是 **HTML 错误页**，`json()` 抛
- *    `Unexpected token '<'` —— 用户看不出真正原因是「需要重新登录」。
- *    故一律 `text()` + 手动 `JSON.parse`，失败时带上 HTTP 状态码与片段。
+ * 2. **Do not use `response.json()`.**
+ *    When a credential expires the Tencent gateway returns an **HTML error page**, and
+ *    `json()` throws `Unexpected token '<'` — the user cannot see that the real cause is
+ *    "you need to log in again". So always `text()` + manual `JSON.parse`, and on failure
+ *    include the HTTP status code and a snippet.
  *
- * 3. **「没东西可领」≠「已经领过」。**
- *    Qoder 的判据必须是「存在 `actionType==='CLAIM_BENEFIT'` 且
- *    `claimStatus==='CLAIMED'` 的条目」，**不能**写成「没有可领项即为已领」——
- *    后者会在「活动还没刷新」「请求头不完整服务端不下发」时误报已领，
- *    而这个方向的错误是**不可逆的**（用户当天真的漏领）。
- *    实测：`qoder-cn` 出现 `CLAIM_BENEFIT/CLAIMED` 形态，`qoder` 只有
- *    `VIEW_DETAILS` 两种形态，判据据此成立。
+ * 3. **"Nothing to claim" ≠ "already claimed".**
+ *    Qoder's criterion must be "there exists an entry with `actionType==='CLAIM_BENEFIT'`
+ *    and `claimStatus==='CLAIMED'`", and **must not** be written as "no claimable item means
+ *    already claimed" — the latter misreports "already claimed" when "the activity has not
+ *    refreshed yet" or "the server does not send it down because the request headers are
+ *    incomplete", and an error in this direction is **irreversible** (the user genuinely
+ *    misses the claim that day).
+ *    Measured: `qoder-cn` shows the `CLAIM_BENEFIT/CLAIMED` shape, while `qoder` only ever
+ *    has the `VIEW_DETAILS` shape; the criterion holds accordingly.
  *
- * 4. **`active` 恒为 `true`（拿到响应即 true）。**
- *    Qoder 在「今天已领」时会把 `campaigns` 清空并回 `showCampaign:false`。
- *    若按「列表非空」判 active，调用方会先命中「活动未开启」分支，
- *    把「今天已领」误报成「活动未开启」。
+ * 4. **`active` is always `true` (true as soon as we get a response).**
+ *    When "already claimed today", Qoder clears `campaigns` and returns `showCampaign:false`.
+ *    If active were judged by "the list is non-empty", the caller would first hit the
+ *    "activity not open" branch and misreport "already claimed today" as "activity not open".
  *
- * 5. **逐账号串行，绝不并发。** 见 `checkinScheduler.js`。
+ * 5. **Serial per account, never concurrent.** See `checkinScheduler.js`.
  *
- * ## 关键行为差异（不是笔误）
+ * ## Key behavioral differences (not typos)
  *
- * | provider | 幂等判据 | 幂等时的 HTTP |
+ * | provider | idempotency criterion | HTTP when idempotent |
  * |---|---|---|
  * | codebuddy-cn / intl | `code === 10001` / `1001` | **400** |
  * | qoder / qoder-cn | `replayed === true` | 200 |
  * | minimax | `claim_result === 2` | 200 |
  *
- * ## 时区
+ * ## Timezone
  *
- * codebuddy / qoder 的每日额度按 **UTC+8** 结算（服务端口径，与客户端时区无关）。
- * minimax **例外**：它按**客户端上报的 IANA 时区**结算，`timezone_id` 是必填
- * 查询参数，**不得套用 UTC+8**。
+ * codebuddy / qoder settle their daily quota by **UTC+8** (the server's convention,
+ * independent of the client timezone).
+ * minimax is the **exception**: it settles by the **IANA timezone reported by the client**;
+ * `timezone_id` is a required query parameter and **must not be assumed to be UTC+8**.
  */
 
-/** 控制面请求超时（签到是写操作，给足时间但不无限等）。 */
+/** Control-plane request timeout (check-in is a write operation: give it enough time, but don't wait forever). */
 const REQUEST_TIMEOUT_MS = 30_000;
 
-/** UTC+8 偏移（毫秒）。与 Qoder 计费口径一致。 */
+/** UTC+8 offset (milliseconds). Matches Qoder's billing convention. */
 export const UTC8_OFFSET_MS = 8 * 3_600_000;
 
 /**
- * 取「UTC+8 的当天日期」（`YYYY-MM-DD`）。
+ * Get "today's date in UTC+8" (`YYYY-MM-DD`).
  *
- * ⚠️ 必须用**算术平移**而不是运行环境时区：日界归服务端（各渠道的每日额度按 UTC+8
- * 结算）。取运行环境时区会在容器时区不同时得到错的「今天」—— 偏东会提前把当天记为
- * 已跑（真的漏签），偏西会一天跑两次。
+ * ⚠️ Must use **arithmetic shifting** rather than the runtime timezone: the day boundary
+ * belongs to the server (each channel settles its daily quota by UTC+8). Using the runtime
+ * timezone yields the wrong "today" when the container timezone differs — if it runs ahead
+ * (east), the day gets recorded as already run prematurely (a genuine missed check-in);
+ * if it runs behind (west), it runs twice in one day.
  */
 export function utc8DateString(nowMs = Date.now()) {
   return new Date(nowMs + UTC8_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-/** 取当前 IANA 时区名（MiniMax 用；客户端就是这么取的）。 */
+/** Get the current IANA timezone name (used by MiniMax; this is how the client obtains it). */
 export function resolveIanaTimezone(resolve) {
   try {
     const zone = (resolve || (() => Intl.DateTimeFormat().resolvedOptions().timeZone))();
@@ -78,18 +87,18 @@ export function resolveIanaTimezone(resolve) {
   }
 }
 
-// ── 小工具（容忍上游改型） ───────────────────────────────────────────────────
+// ── Small utilities (tolerant of upstream shape changes) ────────────────────
 
 function asRecord(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? v : undefined;
 }
 
-/** 读数字，兼容字符串形态（上游用字符串规避浮点）。非法 ⇒ undefined，**不编造 0**。 */
+/** Read a number, tolerating the string form (upstream uses strings to dodge floating point). Invalid ⇒ undefined, **never fabricate 0**. */
 function looseNumber(v) {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
   if (typeof v !== "string") return undefined;
   const t = v.trim();
-  if (t === "") return undefined; // ⚠️ Number('') === 0，会把空串误读成 0
+  if (t === "") return undefined; // ⚠️ Number('') === 0, which would misread an empty string as 0
   const n = Number(t);
   return Number.isFinite(n) ? n : undefined;
 }
@@ -103,11 +112,12 @@ function looseString(v) {
 }
 
 /**
- * 发一次请求并解析 JSON 文本体。
+ * Send one request and parse the JSON text body.
  *
- * 刻意**不用** `response.json()`：凭据失效时网关回 HTML，`json()` 的报错
- * (`Unexpected token '<'`) 对用户毫无意义。这里先 `text()` 再解析，
- * 非 JSON 时带 HTTP 状态码，让「401/403 → 凭据问题」这条线索浮出来。
+ * Deliberately **does not** use `response.json()`: when a credential expires the gateway
+ * returns HTML, and `json()`'s error (`Unexpected token '<'`) is meaningless to the user.
+ * Here we `text()` first and then parse, and on non-JSON we include the HTTP status code so
+ * the clue "401/403 → credential problem" surfaces.
  */
 async function requestJson(url, init) {
   let response;
@@ -143,24 +153,26 @@ async function requestJson(url, init) {
 }
 
 /**
- * HTTP 层面的**凭据失效**判定。
+ * HTTP-level **credential-expiry** detection.
  *
- * ⚠️ 为什么必须单独判：`requestJson` 只看「能不能解析成 JSON 对象」，因此
- * `401 {"error":"invalid access token"}` 这种响应会被判成 `ok:true`，再由各
- * provider 的解析器默认成「今天没签」—— 于是**凭据失效被静默显示为「未签到」**，
- * 用户看到的是「签到没生效」而不是「该重新登录了」。实测 minimax 账号
- * （已失效 `mmoat_` 凭据）精确命中这个形状。
+ * ⚠️ Why this must be checked separately: `requestJson` only looks at "does it parse into
+ * a JSON object", so a response like `401 {"error":"invalid access token"}` is judged
+ * `ok:true`, and then each provider's parser defaults it to "not checked in today" — so
+ * **credential expiry is silently displayed as "not checked in"**, and the user sees
+ * "check-in didn't take effect" instead of "you need to log in again". Measured: a minimax
+ * account (with an expired `mmoat_` credential) hit exactly this shape.
  *
- * ⚠️ 为什么不会误伤 codebuddy 的幂等分支：那里重复领取是 **HTTP 400**
- * （`code:10001`），不是 401/403。故把 401/403 当硬失败是安全的。
+ * ⚠️ Why this won't accidentally break codebuddy's idempotency branch: there a duplicate
+ * claim is **HTTP 400** (`code:10001`), not 401/403. So treating 401/403 as a hard failure
+ * is safe.
  */
 function credentialFailure(status) {
   return status === 401 || status === 403;
 }
 
-// ── 归一化结果 ──────────────────────────────────────────────────────────────
+// ── Normalized results ──────────────────────────────────────────────────────
 
-/** 归一化的签到结果。`kind` 的四种取值即「已领 / 本次领到 / 无资格 / 失败」。 */
+/** A normalized check-in result. The four values of `kind` are "already claimed / claimed now / not eligible / failed". */
 export function claimed(credit, extra = {}) {
   return { kind: "claimed", credit: typeof credit === "number" && Number.isFinite(credit) ? credit : 0, ...extra };
 }
@@ -174,33 +186,42 @@ export function failed(code, message) {
   return { kind: "failed", code, message };
 }
 
-// ── CodeBuddy（中国版 + 国际版，协议同型） ─────────────────────────────────────
+// ── CodeBuddy (China edition + international edition, same protocol shape) ──
 
 /**
- * CodeBuddy 的签到端点。
+ * CodeBuddy's check-in endpoints.
  *
- * 中国版 `copilot.tencent.com`（**已用 7 个真实账号实测**）；
- * 国际版 `www.codebuddy.ai` —— 与 CN 同型（其 registry 的 `transport.usage.url`
- * 就是同一条 `/v2/billing/meter/get-user-resource` 路径，只是换了域名）。
- * ⚠️ 国际版**未经真实账号实测**（开发时可用的账号里没有该渠道），归为「结构同型」。
+ * China edition `copilot.tencent.com` (**measured with 7 real accounts**);
+ * international edition `www.codebuddy.ai` — same shape as CN (its registry's
+ * `transport.usage.url` is the very same `/v2/billing/meter/get-user-resource` path,
+ * just with a different domain).
+ * ⚠️ The international edition has **not been measured against a real account** (none of
+ * the accounts available during development were on that channel); it is classified as
+ * "structurally identical".
  */
 const CODEBUDDY_CHECKIN_STATUS_PATH = "/v2/billing/meter/checkin-activity-status";
 const CODEBUDDY_DAILY_CHECKIN_PATH = "/v2/billing/meter/daily-checkin";
 
-/** 业务码：重复领取（注意有两个值，两个站点各用一个）。 */
+/** Business code: duplicate claim (note there are two values; each site uses one). */
 const CB_CODE_ALREADY_CLAIMED = 10001;
 const CB_CODE_ALREADY_CLAIMED_ALT = 1001;
-/** 业务码：无领取资格 / 活动结束。 */
+/** Business code: not eligible to claim / activity ended. */
 const CB_CODE_NO_QUALIFICATION = 1002;
 const CB_CODE_ACTIVITY_ENDED = 1003;
 
 function codebuddyHeaders(data) {
   const psd = asRecord(data.providerSpecificData) || {};
   const headers = {
-    Authorization: `Bearer ${data.accessToken || ""}`,
+    // An API-key connection stores the credential in `apiKey`, an OAuth one in
+    // `accessToken` (see `rowToConn` — the row's `data` object is spread onto the
+    // connection). Reading only `accessToken` sends an empty bearer for the
+    // apikey form, so the claim is refused with no useful error. The quota
+    // readers pass both for the same reason: `getCodeBuddyIntlUsage(c.accessToken,
+    // c.apiKey, …)` in open-sse/services/usage.js.
+    Authorization: `Bearer ${data.accessToken || data.apiKey || ""}`,
     Accept: "application/json",
     "Content-Type": "application/json",
-    // X-Domain 与请求的 baseURL 必须一致，否则前后矛盾（服务端按域名判区域）。
+    // X-Domain must match the request's baseURL, otherwise they contradict each other (the server determines the region from the domain).
     "X-Domain": looseString(psd.domain) || "copilot.tencent.com",
     "X-Product": "SaaS",
     "X-Product-Code": "codebuddy",
@@ -227,7 +248,7 @@ async function codebuddyStatus(host, data) {
   if (credentialFailure(res.status)) {
     return { ok: false, message: `Credential expired (HTTP ${res.status}). Reconnect this account.` };
   }
-  // ⚠️ 上游 msg 是中文，只作 detail（见 codebuddyClaim 的同类说明）。
+  // ⚠️ The upstream msg is in Chinese; use it only as detail (see the analogous note in codebuddyClaim).
   if (looseNumber(body.code) !== 0) {
     const upstream = looseString(body.msg);
     return { ok: false, message: "Status query failed", ...(upstream ? { detail: upstream } : {}) };
@@ -247,7 +268,7 @@ async function codebuddyStatus(host, data) {
 }
 
 async function codebuddyClaim(host, data) {
-  // ⚠️ 判据是响应体的 code，不是 HTTP 状态码（重复领取 = HTTP 400 + code 10001）。
+  // ⚠️ The criterion is the response body's code, not the HTTP status code (duplicate claim = HTTP 400 + code 10001).
   const res = await requestJson(`${host}${CODEBUDDY_DAILY_CHECKIN_PATH}`, {
     method: "POST",
     headers: codebuddyHeaders(data),
@@ -260,9 +281,10 @@ async function codebuddyClaim(host, data) {
     return failed(-1, `Credential expired (HTTP ${res.status}). Reconnect this account.`);
   }
   const code = looseNumber(body.code) ?? -1;
-  // ⚠️ 上游的 `msg` 是**中文**（如「今天已签到，请明天再来」）。它不能直接当
-  // 展示文案：i18n 只翻英文原文，中文会原样留在英文界面里。故把它放进
-  // `detail`（进日志、便于对照上游），`message` 用英文。
+  // ⚠️ The upstream `msg` is in **Chinese** (e.g. "already checked in today, please come
+  // back tomorrow"). It cannot be used directly as display copy: i18n only translates
+  // English source text, so Chinese would be left as-is in the English UI. So put it in
+  // `detail` (goes to logs, convenient for cross-checking upstream), and use English for `message`.
   const upstream = looseString(body.msg);
   const detail = upstream ? { detail: upstream } : {};
 
@@ -282,25 +304,29 @@ async function codebuddyClaim(host, data) {
   });
 }
 
-// ── Qoder（国际版 + 中国版，协议同型） ────────────────────────────────────────
+// ── Qoder (international edition + China edition, same protocol shape) ──────
 
 const QODER_CAMPAIGNS_PATH = "/sash/api/v1/me/campaigns";
 
 /**
- * Qoder `/sash/` 端点的公共请求头。
+ * Common request headers for Qoder's `/sash/` endpoints.
  *
- * ⚠️ 两个 machine 头**都需要**才可能拿到可领活动（消融实测：缺任一条，
- * 服务端只回 `VIEW_DETAILS`，**不下发** `CLAIM_BENEFIT`）。9router 的连接里
- * `machineId` 是登录时持久化的 UUID，正好可作 token/type 的来源。
- * 拿不到时**不发空头**——漏发是安全降级，发空串可能被判非法设备。
+ * ⚠️ **Both** machine headers are required to have any chance of getting a claimable
+ * activity (ablation measured: with either one missing, the server only returns
+ * `VIEW_DETAILS` and **does not send down** `CLAIM_BENEFIT`). In 9router's connection,
+ * `machineId` is the UUID persisted at login, which conveniently serves as the source for
+ * token/type. When it can't be obtained, **do not send empty headers** — omitting them is a
+ * safe degradation, whereas sending an empty string may be judged an illegal device.
  */
 function qoderHeaders(data) {
   const psd = asRecord(data.providerSpecificData) || {};
   const headers = {
     Accept: "application/json",
-    Authorization: `Bearer ${data.accessToken || ""}`,
+    // Same credential-shape rule as codebuddyHeaders: an apikey connection keeps
+    // the token in `apiKey`, an OAuth one in `accessToken`.
+    Authorization: `Bearer ${data.accessToken || data.apiKey || ""}`,
     "User-Agent": "Qoder",
-    // '10' = 桌面 app 身份；用 '5'（CLI）时服务端恒不下发可领活动。
+    // '10' = desktop app identity; with '5' (CLI) the server never sends down a claimable activity.
     "Cosy-ClientType": "10",
   };
   const machineId = looseString(psd.machineId);
@@ -327,12 +353,16 @@ function qoderClaimable(campaigns) {
 }
 
 /**
- * 「今天已领」的判据：存在**领分类**活动且其状态为 `CLAIMED`。
+ * The criterion for "already claimed today": there exists a **claim-type** activity whose
+ * status is `CLAIMED`.
  *
- * ⚠️ 不能写成「没有可领项即为已领」（见模块头第 3 条）。
- * ⚠️ 也不能据此跳过 claim —— 服务端对重复领取是幂等的（回 `replayed:true`），
- *    误判成「未领」最多多一次无害请求；误判成「已领」则当天真的漏领。
- *    故状态只用于**呈现**，claim 仍照发（由 `replayed` 兜底）。
+ * ⚠️ Must not be written as "no claimable item means already claimed" (see item 3 in the
+ *    module header).
+ * ⚠️ Nor may claim be skipped on this basis — the server is idempotent for duplicate
+ *    claims (returns `replayed:true`); misjudging it as "not claimed" costs at most one
+ *    harmless extra request, whereas misjudging it as "already claimed" means a genuine
+ *    missed claim that day. So the status is used only for **presentation**, and claim is
+ *    still sent (backstopped by `replayed`).
  */
 function qoderTodayCheckedIn(campaigns) {
   return campaigns.some((c) => c.actionType === "CLAIM_BENEFIT" && c.claimStatus === "CLAIMED");
@@ -361,7 +391,7 @@ async function qoderClaimOne(host, data, campaignId) {
     return failed(-1, `Credential expired (HTTP ${res.status}). Reconnect this account.`);
   }
 
-  // ⚠️ 幂等判据是 `replayed`：重复领取同样 200，但 replayed=true 且不含 benefit。
+  // ⚠️ The idempotency criterion is `replayed`: a duplicate claim also returns 200, but with replayed=true and no benefit.
   if (looseBool(res.body.replayed)) return alreadyClaimed("Already claimed today");
   const d = asRecord(res.body.data) || res.body;
   const amount = looseNumber(asRecord(d.benefit)?.amount);
@@ -373,36 +403,36 @@ async function qoderClaimOne(host, data, campaignId) {
 const MINIMAX_SIGNIN_STATUS_PATH = "/minimax-cloud/api/v1/signin/status";
 const MINIMAX_SIGNIN_CLAIM_PATH = "/minimax-cloud/api/v1/signin/claim";
 
-/** 单日状态（asar `SigninDayStatus`）。 */
+/** Single-day status (asar `SigninDayStatus`). */
 const MINIMAX_DAY = { Upcoming: 1, Claimable: 2, Claimed: 3, Disabled: 4 };
-/** 领取结果（asar `SigninClaimResult`）。 */
+/** Claim result (asar `SigninClaimResult`). */
 const MINIMAX_CLAIM_RESULT = { Claimed: 1, AlreadyClaimed: 2 };
 
 function minimaxHeaders(data) {
-  // MiniMax 的业务端点**只需 Bearer**（不需要 machine 头或签名）。
-  // apikey 型连接的 `apiKey` 本身就是 OAuth access token（`mmoat_` 前缀）。
+  // MiniMax's business endpoints **only need Bearer** (no machine headers or signature).
+  // For an apikey-type connection, `apiKey` is itself the OAuth access token (the `mmoat_` prefix).
   return {
     Authorization: `Bearer ${data.accessToken || data.apiKey || ""}`,
     Accept: "application/json",
   };
 }
 
-/** 拆信封：有 `data` 对象就用它，否则用顶层（`credit/details` 是平铺的）。 */
+/** Unwrap the envelope: if there's a `data` object use it, otherwise use the top level (`credit/details` are flat). */
 function unwrapEnvelope(payload) {
   const nested = asRecord(payload.data);
   return nested === undefined ? payload : nested;
 }
 
 /**
- * 业务码在 `base_resp.status_code`，且 `invalid timezone_id` 也是 **HTTP 200**
- * —— 只看 HTTP 状态码会把它当成成功。
+ * The business code is in `base_resp.status_code`, and `invalid timezone_id` is also
+ * **HTTP 200** — looking only at the HTTP status code would treat it as success.
  */
 function minimaxBusinessError(body) {
   const base = asRecord(body.base_resp);
   if (base === undefined) return undefined;
   const code = looseNumber(base.status_code);
   if (code === undefined || code === 0) return undefined;
-  // ⚠️ `status_msg` 可能是中文，只作 detail（见 codebuddyClaim 的同类说明）。
+  // ⚠️ `status_msg` may be Chinese; use it only as detail (see the analogous note in codebuddyClaim).
   const upstream = looseString(base.status_msg);
   return { code, message: `Upstream error ${code}`, ...(upstream ? { detail: upstream } : {}) };
 }
@@ -447,8 +477,9 @@ async function minimaxClaim(host, data, timezoneId) {
   }
 
   const biz = minimaxBusinessError(res.body);
-  // ⚠️ 必须把 `detail`（上游原文）一起带到 outcome 上：丢了它，`biz` 里保留的
-  // 上游说明就到不了日志，排查时只剩「Upstream error 1004」这种无上下文的码。
+  // ⚠️ The `detail` (upstream's original text) must be carried onto the outcome too: lose
+  // it and the upstream explanation kept in `biz` never reaches the logs, leaving only a
+  // context-free code like "Upstream error 1004" when debugging.
   if (biz) {
     return { ...failed(biz.code, biz.message), ...(biz.detail ? { detail: biz.detail } : {}) };
   }
@@ -456,22 +487,22 @@ async function minimaxClaim(host, data, timezoneId) {
   const payload = unwrapEnvelope(res.body);
   const claimResult = looseNumber(payload.claim_result);
 
-  // ⚠️ 幂等：重复领取返回 2（AlreadyClaimed）。
+  // ⚠️ Idempotency: a duplicate claim returns 2 (AlreadyClaimed).
   if (claimResult === MINIMAX_CLAIM_RESULT.AlreadyClaimed) return alreadyClaimed("Already checked in today");
   if (claimResult !== MINIMAX_CLAIM_RESULT.Claimed) {
     return failed(-1, "Check-in response is missing a valid claim_result");
   }
-  // ⚠️ credit 取 points（总数，已含 bonus_points）。
+  // ⚠️ credit takes points (the total, already including bonus_points).
   return claimed(looseNumber(payload.points) ?? 0);
 }
 
-// ── provider 表 ────────────────────────────────────────────────────────────
+// ── provider table ──────────────────────────────────────────────────────────
 
 /**
- * 有签到实现的 provider。
+ * Providers that have a check-in implementation.
  *
- * `run` 的契约：**永不抛错**，失败也返回 `failed` outcome
- * （批量签到时单账号失败不得中断其余账号）。
+ * The contract of `run`: **never throw**; on failure it returns a `failed` outcome too
+ * (during batch check-in, a single account's failure must not interrupt the rest).
  */
 const IMPLEMENTATIONS = {
   "codebuddy-cn": {
@@ -504,7 +535,7 @@ const IMPLEMENTATIONS = {
       if (!r.ok) return { ok: false, message: r.message };
       return {
         ok: true,
-        // ⚠️ active 恒 true（拿到响应即 true），见模块头第 4 条。
+        // ⚠️ active is always true (true as soon as we get a response); see item 4 in the module header.
         todayCheckedIn: qoderTodayCheckedIn(r.campaigns),
         claimable: qoderClaimable(r.campaigns).length,
       };
@@ -544,17 +575,18 @@ const IMPLEMENTATIONS = {
     claim: (data, ctx) => minimaxClaim("https://agent.minimax.cn", data, ctx.timezoneId),
     unit: "credit",
     verified: false,
-    // 同样只陈述「未经真实领取验证」，不描述某台机器上有没有账号（换台机器就不对了）。
+    // Likewise states only "not verified by a real claim", and does not describe whether some machine has an account (that stops being true on another machine).
     note: "Endpoints and envelope shape follow the source, but a live claim has not been verified (the credential used during development was expired).",
   },
 };
 
 /**
- * 逐条 claim Qoder 的活动；**第一条成功即停**（一个账号一天只有一份日签）。
+ * Claim Qoder's activities one by one; **stop as soon as the first one succeeds** (an
+ * account has only one daily check-in per day).
  *
- * 全部都是 `replayed`（此前已领）时返回 already-claimed；
- * 一条可领的都没有时返回 `inactive`（**不是** already-claimed —— 那会让当天
- * 真的漏领，而这个方向不可逆）。
+ * When all of them are `replayed` (already claimed earlier), return already-claimed;
+ * when there is not a single claimable one, return `inactive` (**not** already-claimed —
+ * that would cause a genuine missed claim that day, and this direction is irreversible).
  */
 async function claimQoderCampaignList(host, data, campaigns) {
   const claimable = qoderClaimable(campaigns);
@@ -573,30 +605,32 @@ async function claimQoderCampaignList(host, data, campaigns) {
   return last;
 }
 
-/** 明确**不支持**签到的 provider 及原因（判定时不发任何上游请求）。 */
+/** Providers that explicitly do **not** support check-in, and the reason (determining this sends no upstream request at all). */
 const UNSUPPORTED = {
   cline: "Cline does not support daily check-in (no check-in endpoint upstream)",
   workbuddy: "WorkBuddy does not support daily check-in (no check-in endpoint upstream)",
   raccoon: "Raccoon Work does not support daily check-in (credits are granted server-side)",
 };
 
-/** 该 provider 是否有签到实现。 */
+/** Whether this provider has a check-in implementation. */
 export function isCheckinSupported(provider) {
   return Object.prototype.hasOwnProperty.call(IMPLEMENTATIONS, provider);
 }
 
-/** 该 provider 的展示名（无实现时回退 provider id）。 */
+/** This provider's display name (falls back to the provider id when there is no implementation). */
 export function checkinLabel(provider) {
   return IMPLEMENTATIONS[provider]?.label || provider;
 }
 
 /**
- * 所有有实现的 provider（供 UI / 调试枚举）。
+ * All providers with an implementation (for UI / debugging enumeration).
  *
- * ⚠️ `note` 是**直接渲染到仪表盘**的文本，因此必须是**英文**：运行时 i18n 走
- * 「英文原文 → 译文」查表（src/i18n/runtime.js），中文原文永远不会被翻译，
- * 会原样留在英文界面里（实测第一版就是这样）。理由本身仍用中文写在注册表的
- * 源码注释里，那里是给维护者看的，不进 UI。
+ * ⚠️ `note` is text **rendered directly onto the dashboard**, so it must be in **English**:
+ * runtime i18n works by looking up "English source → translation" (src/i18n/runtime.js);
+ * Chinese source text is never translated and would be left as-is in the English UI
+ * (measured: the first version was exactly like this). The rationale itself is still
+ * written in Chinese in the registry's source comments, which are for maintainers and do
+ * not enter the UI.
  */
 export function listCheckinProviders() {
   return Object.keys(IMPLEMENTATIONS).map((id) => ({
@@ -607,16 +641,17 @@ export function listCheckinProviders() {
   }));
 }
 
-/** 不支持签到的原因（支持则返回 undefined）。 */
+/** The reason check-in is unsupported (returns undefined if supported). */
 export function unsupportedReason(provider) {
   return UNSUPPORTED[provider];
 }
 
 /**
- * 签到状态（只读，**不发写请求**）。
+ * Check-in status (read-only, **sends no write request**).
  *
- * @returns `{ ok: true, todayCheckedIn, ... }` 或 `{ ok: false, message }`。
- *   失败与「余额为 0」严格区分 —— 网络失败不等于「今天没签」。
+ * @returns `{ ok: true, todayCheckedIn, ... }` or `{ ok: false, message }`.
+ *   Failure is strictly distinguished from "balance is 0" — a network failure does not
+ *   mean "not checked in today".
  */
 export async function checkinStatus(provider, data, ctx = {}) {
   const impl = IMPLEMENTATIONS[provider];
@@ -633,9 +668,10 @@ export async function checkinStatus(provider, data, ctx = {}) {
 }
 
 /**
- * 执行一次签到领取（**写操作**；每账号每天只应调用一次）。
+ * Perform one check-in claim (**a write operation**; should be called only once per account
+ * per day).
  *
- * **永不抛错** —— 失败也返回 `failed` outcome。
+ * **Never throws** — on failure it returns a `failed` outcome too.
  */
 export async function claimCheckin(provider, data, ctx = {}) {
   const impl = IMPLEMENTATIONS[provider];
@@ -652,12 +688,15 @@ export async function claimCheckin(provider, data, ctx = {}) {
 }
 
 /**
- * 把 outcome 整理成一句人话（UI / 日志共用）。
+ * Turn an outcome into a human-readable sentence (shared by UI / logs).
  *
- * ⚠️ 这是展示文案的**唯一收口**，因此在这里再兜一道：若 `message` 含中日韩字符，
- * 说明有上游原文漏进了展示路径（i18n 只翻英文原文，中文会原样留在英文界面里），
- * 此时回落到英文默认文案。各 provider 已把上游原文放进 `detail`，这一层是防御性的
- * —— 新增 provider 时忘了这条规则也不会把中文漏到界面上（有回归用例守着）。
+ * ⚠️ This is the **sole funnel** for display copy, so it adds one more safety net here: if
+ * `message` contains CJK characters, it means some upstream original text leaked into the
+ * display path (i18n only translates English source text; Chinese would be left as-is in
+ * the English UI), in which case fall back to the English default copy. Each provider
+ * already puts the upstream original text into `detail`; this layer is defensive — if a new
+ * provider forgets this rule it still won't leak Chinese into the UI (there is a regression
+ * test guarding it).
  */
 const CJK_RE = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
 

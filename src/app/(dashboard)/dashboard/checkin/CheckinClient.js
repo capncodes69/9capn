@@ -1,33 +1,37 @@
 "use client";
 
 /**
- * 每日自动签到面板。
+ * Daily auto check-in panel.
  *
- * ## 交互
+ * ## Interaction
  *
- * - 顶部总开关：打开后由后台调度器每天自动跑一次（默认关闭，见 checkinScheduler.js）。
- * - 每个渠道一行：开关决定它是否纳入**自动**签到；右侧「立即签到」只跑这一个渠道，
- *   是**显式操作**，不受总开关与渠道勾选限制。
- * - 「立即签到」按钮在 `accounts === 0` 时禁用 —— 没有账号的渠道点了只会显示
- *   「没有可签到的账号」，属于无效操作。
+ * - Top master switch: when on, a background scheduler runs it automatically once a day (off by default, see checkinScheduler.js).
+ * - One row per provider: the switch decides whether it is included in the **automatic** check-in;
+ *   the "Check in now" button on the right runs only that one provider and is an **explicit action**,
+ *   not constrained by the master switch or the per-provider selection.
+ * - The "Check in now" button is disabled when `accounts === 0` — clicking a provider with no accounts
+ *   would only show "No accounts to check in", which is a no-op.
  *
- * ## 为什么「立即签到」是灰的要点明原因
+ * ## Why the disabled "Check in now" needs its reason spelled out
  *
- * `codebuddy-intl` 这类渠道可能一个账号都没有。如果按钮照常可点，用户会以为
- * 「点了没反应」；禁用 + 行尾标出「未连接账号」才是诚实的呈现。
+ * A provider like `codebuddy-intl` may have no accounts at all. If the button stayed clickable, users
+ * would think "I clicked and nothing happened"; disabling it + marking "no accounts connected" at the
+ * end of the row is the honest presentation.
  *
- * ## 状态刷新的取舍
+ * ## Trade-off on status refresh
  *
- * 一轮签到是「渠道数 × 账号数」次串行上游请求（反风控，不能并发），所以可能跑十几秒。
- * 因此点击后按钮进入 loading 并禁用（不给二次点击的机会），完成后用**本轮返回值**
- * 直接渲染结果，而不是立刻重新 GET —— 省一次上游探测，也避免界面闪回旧状态。
+ * One check-in round is "number of providers × number of accounts" serial upstream requests
+ * (anti-rate-limit, cannot be concurrent), so it can take over ten seconds.
+ * Therefore, after clicking, the button enters loading and is disabled (no chance of a second click);
+ * when done, the result is rendered directly from **this round's return value**, rather than immediately
+ * re-GETting — this saves an upstream probe and avoids the UI flashing back to the old state.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Card, Button, Toggle, Badge, Spinner } from "@/shared/components";
 import { getCurrentLocale, onLocaleChange } from "@/i18n/runtime";
 
-/** 单次请求的超时。一轮可能是 10+ 个串行上游请求，给足余量。 */
+/** Timeout for a single request. A round may be 10+ serial upstream requests, so give plenty of margin. */
 const RUN_TIMEOUT_MS = 180_000;
 
 function outcomeVariant(claimed, alreadyClaimed, failed) {
@@ -38,12 +42,15 @@ function outcomeVariant(claimed, alreadyClaimed, failed) {
 }
 
 /**
- * 把一个渠道的计数渲染成**英文**句子，而不是直接用服务端生成的中文 `text`。
+ * Render a provider's counts as an **English** sentence, instead of using the
+ * server-generated Chinese `text` directly.
  *
- * ⚠️ 为什么必须在前端拼：运行时 i18n 是「英文原文 → 译文」查表（见 src/i18n/runtime.js），
- * 服务端返回的中文原样落在英文界面里，**永远不会被翻译**。实测第一版就是这样：
- * 英文 UI 里混着「Last: 已签到 7」和中文备注。
- * 结构化计数是语言中立的，在前端拼成英文才能进 i18n 查表。
+ * ⚠️ Why it must be assembled on the frontend: runtime i18n is an "English source → translation"
+ * lookup table (see src/i18n/runtime.js); Chinese returned by the server lands as-is in the English UI
+ * and **will never be translated**. The first version did exactly this in practice:
+ * the English UI mixed in "Last: 已签到 7" (i.e. "checked in 7", left untranslated) and Chinese notes.
+ * Structured counts are language-neutral, so assembling them into English on the frontend is what
+ * lets them go through the i18n lookup.
  */
 function describeCounts(c) {
   const parts = [];
@@ -55,7 +62,7 @@ function describeCounts(c) {
   return parts.join(", ") || "Nothing to do";
 }
 
-/** 整轮汇总（同样是前端拼英文，理由见 describeCounts）。 */
+/** Whole-round summary (also assembled into English on the frontend; rationale see describeCounts). */
 function summarize(channels) {
   const t = { accounts: 0, claimed: 0, alreadyClaimed: 0, inactive: 0, failed: 0, credit: 0 };
   for (const c of channels) {
@@ -90,7 +97,7 @@ export default function CheckinClient() {
   const [saving, setSaving] = useState(false);
   const [locale, setLocale] = useState("en");
 
-  // 运行时 i18n 是按英文原文查表的，注册一下让语言切换后重渲染
+  // Runtime i18n looks up by English source, so register here to re-render after a language switch
   useEffect(() => {
     setLocale(getCurrentLocale());
     return onLocaleChange(() => setLocale(getCurrentLocale()));
@@ -122,7 +129,7 @@ export default function CheckinClient() {
     refresh();
   }, [refresh]);
 
-  /** 只改设置，不触发签到。 */
+  /** Only change settings, do not trigger a check-in. */
   const patch = async (body) => {
     setSaving(true);
     setError("");
@@ -138,14 +145,14 @@ export default function CheckinClient() {
       return true;
     } catch (e) {
       setError(String(e.message || e));
-      await refresh(); // 失败时回到服务端的真实状态，不留错误的前端乐观值
+      await refresh(); // On failure, fall back to the server's real state, leaving no wrong optimistic frontend value
       return false;
     } finally {
       setSaving(false);
     }
   };
 
-  /** 跑一轮签到。provider 为空 = 全部渠道。 */
+  /** Run one check-in round. An empty provider = all providers. */
   const run = async (provider) => {
     setRunning(provider || "all");
     setError("");
@@ -163,7 +170,7 @@ export default function CheckinClient() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || data.message || `HTTP ${res.status}`);
       setLastResult(data);
-      // 本轮已写状态文件 —— 刷新状态区（不重新探测上游）
+      // This round has written the status file — refresh the status area (without re-probing upstream)
       await refresh();
     } catch (e) {
       setError(e.name === "AbortError" ? "Check-in timed out. Check the server logs for the result." : String(e.message || e));
@@ -173,23 +180,24 @@ export default function CheckinClient() {
   };
 
   const onToggleMaster = (value) => {
-    setEnabled(value); // 乐观：开关是纯本地状态，失败时 patch() 会拉回真值
+    setEnabled(value); // Optimistic: the switch is purely local state; on failure patch() pulls back the real value
     patch({ enabled: value });
   };
 
   /**
-   * 渠道是否纳入自动签到。
+   * Whether a provider is included in automatic check-in.
    *
-   * ⚠️ 关键语义：`providers` **为空对象 = 全部渠道都纳入**（调度器用
-   * `optedIn.length > 0` 判「有没有被显式限制过」）。因此空对象时不能把每个开关
-   * 都画成「关」—— 那会显示成「一个都不签」，而实际行为是全签，属于欺骗性 UI。
-   * 一旦用户动了任何一个开关，就把整份名单**具体化**成显式映射。
+   * ⚠️ Key semantics: an **empty `providers` object = all providers included** (the scheduler uses
+   * `optedIn.length > 0` to decide "whether it has ever been explicitly restricted"). So with an empty
+   * object, each switch must not be drawn as "off" — that would show "check in nothing", while the actual
+   * behavior is check in all, which would be a deceptive UI.
+   * Once the user flips any one switch, the whole list is **made concrete** into an explicit mapping.
    */
   const explicitSelection = Object.keys(providers).length > 0;
   const isIncluded = (id) => (explicitSelection ? providers[id] === true : true);
 
   const onToggleProvider = (id, value) => {
-    // 具体化：以「当前生效的完整名单」为基准改一项，避免把其余渠道意外排除。
+    // Make concrete: change one entry based on "the full list currently in effect", to avoid accidentally excluding the rest.
     const next = {};
     for (const p of supported) next[p.id] = isIncluded(p.id);
     next[id] = value;
@@ -197,7 +205,7 @@ export default function CheckinClient() {
     patch({ providers: next });
   };
 
-  /** 上次逐渠道结果（来自状态文件）。 */
+  /** Last per-provider result (from the status file). */
   const lastChannels = state?.channels || [];
 
   if (loading) {
@@ -210,14 +218,14 @@ export default function CheckinClient() {
 
   return (
     <div className="space-y-4">
-      {/* ── 错误提示 ── */}
+      {/* ── Error message ── */}
       {error && (
         <div className="p-3 rounded-[10px] bg-red-500/10 border border-red-500/30 text-sm text-red-600 dark:text-red-400">
           {error}
         </div>
       )}
 
-      {/* ── 总开关 ── */}
+      {/* ── Master switch ── */}
       <Card
         title="Daily Auto Check-in"
         subtitle="Automatically claim daily credits from providers that support check-in"
@@ -265,7 +273,7 @@ export default function CheckinClient() {
               : "No connected accounts for any check-in provider yet."}
           </div>
 
-          {/* ── 上次结果摘要 ── */}
+          {/* ── Last result summary ── */}
           {state?.channels?.length > 0 && (
             <div className="p-3 rounded-[10px] bg-bg border border-border-subtle">
               <div className="flex items-center justify-between gap-3">
@@ -275,8 +283,9 @@ export default function CheckinClient() {
                   {state.lastMarked === false && " · not recorded, will retry"}
                 </span>
               </div>
-              {/* 汇总在**前端**按结构化计数拼英文 —— 服务端的 lastSummary 是中文字符串，
-                  直接渲染会永远无法被 i18n 查表翻译（见 describeCounts 的注释）。 */}
+              {/* The summary is assembled into English on the **frontend** from structured counts — the server's
+                  lastSummary is a Chinese string, and rendering it directly would never be translated by the i18n
+                  lookup (see the comment on describeCounts). */}
               <div className="text-sm text-text-main mt-1">{summarize(state.channels)}</div>
               <div className="space-y-0.5 mt-2">
                 {state.channels.map((c) => (
@@ -291,12 +300,13 @@ export default function CheckinClient() {
         </div>
       </Card>
 
-      {/* ── 本轮结果（刚点完按钮时） ── */}
+      {/* ── This round's result (right after the button is clicked) ── */}
       {lastResult && (
         <Card title="Latest result" icon="receipt_long">
           <div className="space-y-2">
-            {/* 汇总与明细都在前端按结构化计数拼英文 —— 服务端的 summary/text 是中文，
-                直接渲染会永远无法被 i18n 查表翻译（见 describeCounts 的注释）。 */}
+            {/* Both the summary and the details are assembled into English on the frontend from structured counts —
+                the server's summary/text is Chinese, and rendering it directly would never be translated by the
+                i18n lookup (see the comment on describeCounts). */}
             <div className="text-sm text-text-main">{summarize(lastResult.channels || [])}</div>
             <div className="text-xs text-text-muted">
               {lastResult.date} · {lastResult.marked ? "recorded for today" : "not recorded (will retry next start)"}
@@ -316,7 +326,7 @@ export default function CheckinClient() {
         </Card>
       )}
 
-      {/* ── 逐渠道 ── */}
+      {/* ── Per provider ── */}
       <Card
         title="Providers"
         subtitle="Toggle a provider to include it in the automatic run, or claim it right now"
@@ -345,7 +355,7 @@ export default function CheckinClient() {
                         no accounts connected
                       </Badge>
                     )}
-                    {/* 未经真实账号实测的渠道要标出来，不假装已验证 */}
+                    {/* Providers not verified against real accounts must be marked out; do not pretend they are verified */}
                     {p.verified === false && (
                       <Badge variant="info" size="sm">
                         not live-verified
@@ -397,7 +407,7 @@ export default function CheckinClient() {
         )}
       </Card>
 
-      {/* ── 说明 ── */}
+      {/* ── Notes ── */}
       <Card title="How it works" icon="help">
         <ul className="text-xs text-text-muted space-y-1.5 list-disc pl-4">
           <li>

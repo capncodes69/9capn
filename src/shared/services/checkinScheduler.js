@@ -1,65 +1,82 @@
 /**
- * 每日自动签到调度器。
+ * Daily automatic check-in scheduler.
  *
- * ## 为什么是「新写一个文件」而不是改现有模块
+ * ## Why a new file instead of modifying an existing module
  *
- * 上游 9router v0.5.99 全仓**没有任何签到实现**（无路由、无 service、CHANGELOG 零
- * 提及；唯一的 `签到` 字样是测试 fixture 里的上游错误串）。因此本功能是纯新增，
- * 接入方式刻意对齐仓库里已有的 `quotaAutoPing.js`（同一类「opt-in 的后台调度」），
- * 而不是发明新范式 —— 这样它对上游的侵入面只有 3 个文件的小改动。
+ * The upstream 9router v0.5.99 repository has **no check-in implementation at all**
+ * (no route, no service, zero mentions in the CHANGELOG; the only occurrence of the
+ * word `check-in` is an upstream error string in a test fixture). So this feature is
+ * purely additive, and its integration deliberately mirrors the existing
+ * `quotaAutoPing.js` (the same "opt-in background scheduler" pattern) rather than
+ * inventing a new paradigm — that way its footprint on upstream is just a small
+ * change to 3 files.
  *
- * ## 设计取舍（逐条对应实测踩过的坑）
+ * ## Design trade-offs (each one maps to a pitfall hit in real testing)
  *
- * 1. **默认关闭。** 签到是**代用户打上游的写操作**。默认开（用户明确
- *    要求），但 9router 是多用户网关，默认开启会在用户没同意的情况下消耗上游
- *    配额并触发风控。故默认 `enabled: false`，由用户在面板/API 显式打开。
+ * 1. **Default off.** Check-in is a **write operation against upstream performed on the
+ *    user's behalf**. [It could be] default on (by explicit user request), but 9router is
+ *    a multi-user gateway, and enabling it by default would consume upstream quota and
+ *    trigger risk controls without the user's consent. Hence the default `enabled: false`,
+ *    to be explicitly turned on by the user in the panel/API.
  *
- * 2. **每日只跑一次，判据是「今天是否已被处理」，不是「有没有成功」。**
- *    判定口径：只有至少一条结果能**证明今天已被处理**
- *    （`claimed` 或 `already-claimed`）才记日期。整轮全失败 ⇒ **不记**，
- *    下次启动重试。否则一次上游抖动会让用户当天彻底漏签。
+ * 2. **Run only once per day, and the criterion is "has today been handled", not
+ *    "did it succeed".** The rule: the date is only recorded when at least one result
+ *    **proves today was handled** (`claimed` or `already-claimed`). A round where
+ *    everything fails ⇒ **not recorded**, retried on the next start. Otherwise a single
+ *    upstream hiccup would make the user miss the check-in for the whole day.
  *
- * 3. **逐渠道、逐账号串行，绝不并发。** 一轮签到是「渠道数 × 账号数」次串行上游
- *    请求（反风控口径）。这条纪律在实现里反复强调。
+ * 3. **Serial per provider and per account, never concurrent.** One check-in round is
+ *    "number of providers × number of accounts" serial upstream requests (the
+ *    anti-risk-control rule). This discipline is stressed repeatedly in the implementation.
  *
- * 4. **不维护第二份能力名单。** 「谁能签到」的权威是 `checkinProviders.js` 的实现
- *    表。本模块只问「有没有实现」，不去复制 provider 列表 —— 两份名单必然漂移。
+ * 4. **Don't maintain a second capability list.** The authority on "who can check in" is
+ *    the implementation table in `checkinProviders.js`. This module only asks "is it
+ *    implemented", and never copies the provider list — two lists are bound to drift apart.
  *
- * 5. **启动后延迟跑，不跟启动抢资源**，且**等凭据续期先跑一轮**（过期凭据会让
- *    整轮变成失败）。延迟可用 `NINEROUTER_CHECKIN_DELAY_MS` 覆盖，`0` 合法。
+ * 5. **Run after a delay following startup, so as not to compete with startup for
+ *    resources**, and **let credential renewal run a round first** (expired credentials
+ *    would turn the whole round into failures). The delay can be overridden with
+ *    `NINEROUTER_CHECKIN_DELAY_MS`; `0` is valid.
  *
- * 6. **只处理已启用的连接**：跳过 `isActive: false`。
- *    （这里把停用视为用户主动排除，因此不参与签到。）
+ * 6. **Only handle enabled connections**: skip `isActive: false`.
+ *    (Deactivation is treated here as a deliberate user exclusion, so it doesn't take
+ *    part in check-in.)
  *
- * 7. **单账号失败不中断整轮** —— 每个账号包在自己的 try 里，异常转成 failed。
+ * 7. **A single account's failure doesn't abort the whole round** — each account is
+ *    wrapped in its own try, and exceptions are turned into failed.
  *
- * ## 调度是怎么起来的（**踩过的真实坑**）
+ * ## How the scheduler gets started (**a real pitfall hit**)
  *
- * 调度由 `src/instrumentation.js` 的 `register()` 启动 —— **不是**只由
- * `initializeApp.js` 启动。
+ * The scheduler is started by `register()` in `src/instrumentation.js` — **not** only by
+ * `initializeApp.js`.
  *
- * ⚠️ 原因：`initializeApp.js` 的可达路径是
- * `src/app/layout.js → bootstrap.js → initializeApp()`，而 `layout.js` 只在
- * **渲染页面**时执行。实测：只打 `/api/health`、`/api/version` 这类
- * API 请求，`[Checkin] 调度器已启动` **永远不出现** —— 也就是说，一个「只跑
- * API、没人开面板」的网关会**静默地从不签到**。
+ * ⚠️ Why: the reachable path to `initializeApp.js` is
+ * `src/app/layout.js → bootstrap.js → initializeApp()`, and `layout.js` only runs when
+ * **rendering a page**. Measured: when only hitting API requests like `/api/health` or
+ * `/api/version`, `[Checkin] scheduler started` **never appears** — in other words, a
+ * gateway that "only serves API traffic and never has anyone open the panel" would
+ * **silently never check in**.
  *
- * `register()` 是 Next 的 Node-runtime 服务端钩子，**启动即执行一次**，与是否
- * 有流量无关，这才是「每日调度」需要的保证。故 `instrumentation.js` 是主路径，
- * `initializeApp.js` 里那条保留为**冗余保险**（幂等，重复调用无害）。
+ * `register()` is Next's Node-runtime server hook, **executed once at startup**,
+ * regardless of whether there's traffic — that's the guarantee a "daily scheduler"
+ * needs. Hence `instrumentation.js` is the primary path, and the call in
+ * `initializeApp.js` is kept as a **redundant safety net** (idempotent, harmless if
+ * called repeatedly).
  *
- * ## 补充：调度起来之后怎么保证一天只跑一次
+ * ## Addendum: how to ensure it runs only once a day once the scheduler is up
  *
- * 启动后延迟跑一轮，此后每 30 分钟 tick 一次（跨天补跑，长期运行的容器不必
- * 等到重启才签第二天的到）。tick 会重新读 settings 与状态文件：
- * - 今天已成功记过 ⇒ 直接返回；
- * - 开关被关掉 ⇒ 停掉调度器。
+ * Run a round after a delay following startup, then tick every 30 minutes (to catch up
+ * across day boundaries, so a long-running container doesn't have to wait for a restart
+ * to check in for the next day). A tick re-reads settings and the state file:
+ * - already successfully recorded for today ⇒ return immediately;
+ * - the switch has been turned off ⇒ stop the scheduler.
  *
- * ## 状态文件
+ * ## State file
  *
- * `DATA_DIR/checkin-state.json`，原子写（tmp + rename）。独立文件而不是塞进
- * settings：它是**运行状态**不是用户配置，混进 settings 会让「导出/导入配置」
- * 顺带搬走或覆盖签到进度。
+ * `DATA_DIR/checkin-state.json`, written atomically (tmp + rename). A separate file
+ * rather than being stuffed into settings: it's **runtime state**, not user
+ * configuration, and mixing it into settings would let "export/import config" carry away
+ * or overwrite check-in progress as a side effect.
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -74,29 +91,29 @@ import {
   utc8DateString,
 } from "./checkinProviders.js";
 
-/** 状态文件名（放 DATA_DIR 根，与 jwt-secret / machine-id 同级）。 */
+/** State file name (placed in the DATA_DIR root, alongside jwt-secret / machine-id). */
 export const CHECKIN_STATE_FILE = "checkin-state.json";
 
-/** 环境变量：启动后延迟多久再跑自动签到（毫秒）。 */
+/** Env var: how long after startup to wait before running the automatic check-in (ms). */
 export const CHECKIN_DELAY_ENV = "NINEROUTER_CHECKIN_DELAY_MS";
-/** 默认延迟 30 秒（理由见模块头第 5 条）。 */
+/** Default delay of 30 seconds (see reason #5 in the module header). */
 export const DEFAULT_CHECKIN_DELAY_MS = 30_000;
 
 const DEFAULT_STATE = {
-  /** 上次**完成**自动签到的 UTC+8 日期（`YYYY-MM-DD`）；空串 = 从未跑过。 */
+  /** UTC+8 date (`YYYY-MM-DD`) of the last **completed** automatic check-in; empty = never run. */
   lastDate: "",
-  /** 上次跑完的时刻（毫秒）；0 = 从未跑过。 */
+  /** Timestamp (ms) when it last finished; 0 = never run. */
   lastAt: 0,
-  /** 上次整轮是否被记入当日（false ⇒ 下次启动会重试）。 */
+  /** Whether the last round was recorded for the day (false ⇒ it will retry on the next start). */
   lastMarked: false,
-  /** 上次结果摘要（给人看的短句）。 */
+  /** Summary of the last result (a short human-readable sentence). */
   lastSummary: "",
-  /** 逐渠道结果（顺序即遍历顺序）。 */
+  /** Per-provider results (in traversal order). */
   channels: [],
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-/** 逐渠道条目的上限（渠道数是有限的，脏数据不该撑大文件）。 */
+/** Cap on per-provider entries (the number of providers is finite; dirty data shouldn't bloat the file). */
 const MAX_CHANNEL_ENTRIES = 64;
 
 function statePath() {
@@ -104,22 +121,23 @@ function statePath() {
 }
 
 /**
- * 日志出口：**必须走 process.stdout 而不是 console.log**。
+ * Log output: **must go through process.stdout, not console.log**.
  *
- * ⚠️ `src/lib/consoleLogBuffer.js` 的 `initConsoleLogCapture()` 会把
- * `console.log/info/warn/error/debug` 全部替换成写进**内存环形缓冲**的实现
- *（供面板的日志视图读），因此 console 系输出在 `docker logs` 里**看不见**。
- * 调试调度问题时会让人误以为「调度没跑」—— 实测就踩了这个坑。
+ * ⚠️ `initConsoleLogCapture()` in `src/lib/consoleLogBuffer.js` replaces all of
+ * `console.log/info/warn/error/debug` with implementations that write into an
+ * **in-memory ring buffer** (read by the panel's log view), so console-family output is
+ * **invisible** in `docker logs`. When debugging scheduler problems this makes people
+ * think "the scheduler didn't run" — a pitfall hit in real testing.
  */
 function logLine(message) {
   try {
     process.stdout.write(`[Checkin] ${message}\n`);
   } catch {
-    /* stdout 关闭时忽略 */
+    /* ignore when stdout is closed */
   }
 }
 
-/** 归一化状态文档：非法值一律回落默认值（**不抛错**）。 */
+/** Normalize the state document: illegal values all fall back to defaults (**never throws**). */
 export function sanitizeState(raw) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ...DEFAULT_STATE };
   const ms = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
@@ -152,7 +170,7 @@ export function readState() {
     if (!existsSync(statePath())) return { ...DEFAULT_STATE };
     return sanitizeState(JSON.parse(readFileSync(statePath(), "utf8")));
   } catch {
-    // 脏数据按默认处理：读状态失败不该让网关起不来。
+    // Dirty data is treated as defaults: a failed state read must not stop the gateway from starting.
     return { ...DEFAULT_STATE };
   }
 }
@@ -160,13 +178,13 @@ export function readState() {
 function writeState(state) {
   const file = statePath();
   mkdirSync(dirname(file), { recursive: true });
-  // 原子写：先写 tmp 再 rename，避免进程在写一半时被杀留下半个 JSON。
+  // Atomic write: write tmp first, then rename, so a process killed mid-write doesn't leave half a JSON file.
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
   renameSync(tmp, file);
 }
 
-/** 读延迟配置。⚠️ 不能写 `Number(env.X) || 默认` —— `0` 是合法值且是 falsy。 */
+/** Read the delay config. ⚠️ Don't write `Number(env.X) || default` — `0` is a valid value and is falsy. */
 export function checkinDelayMs(env = process.env) {
   const raw = env[CHECKIN_DELAY_ENV];
   if (typeof raw !== "string" || raw.trim() === "") return DEFAULT_CHECKIN_DELAY_MS;
@@ -174,41 +192,41 @@ export function checkinDelayMs(env = process.env) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_CHECKIN_DELAY_MS;
 }
 
-/** 本次运行是否被记入当日（即「今天已被处理」）。 */
+/** Whether this run is recorded for the day (i.e. "today has been handled"). */
 export function shouldMarkToday(totals) {
   return totals.claimed + totals.alreadyClaimed > 0;
 }
 
 /**
- * 跑一轮签到。
+ * Run one check-in round.
  *
  * @param {{ force?: boolean, only?: string[], now?: number, listConnections?: Function }} [options]
- *   `force` 跳过「今天已跑过」判定（手动触发用）。
- * @returns 逐渠道结果 + 汇总。
+ *   `force` skips the "already ran today" check (for manual triggers).
+ * @returns Per-provider results + summary.
  */
 export async function runCheckin({ force = false, only = null, now = Date.now(), listConnections } = {}) {
   const settings = await getSettings();
   const config = settings.autoCheckin || {};
 
-  // 用户显式选择的渠道（空/缺省 = 全部有实现的渠道）。
+  // Providers explicitly chosen by the user (empty/absent = all implemented providers).
   const configured = config.providers && typeof config.providers === "object" ? config.providers : {};
   const optedIn = Object.entries(configured).filter(([, on]) => on === true).map(([p]) => p);
 
-  // 拉账号池：失败就把整轮如实报错（而不是静默当成「没有账号」）。
+  // Fetch the account pool: on failure, report the round honestly as an error (rather than silently treating it as "no accounts").
   let connections;
   try {
     connections = listConnections ? await listConnections() : await getProviderConnections({ isActive: true });
   } catch (error) {
     return {
       ok: false,
-      // 英文：这条 message 会经 API 原样进 UI（i18n 只翻英文原文）。
+      // English: this message goes into the UI verbatim via the API (i18n only translates English source text).
       message: `Failed to read the account pool: ${error instanceof Error ? error.message : String(error)}`,
       channels: [],
       totals: { accounts: 0, claimed: 0, alreadyClaimed: 0, failed: 0, inactive: 0, credit: 0 },
     };
   }
 
-  // 渠道 => 该渠道的启用连接（顺序即 priority 顺序，仓库已排好）。
+  // provider => that provider's enabled connections (order is the priority order, already sorted by the repo).
   const byProvider = new Map();
   for (const conn of connections) {
     if (conn.isActive === false || conn.isActive === 0) continue;
@@ -217,19 +235,22 @@ export async function runCheckin({ force = false, only = null, now = Date.now(),
     byProvider.get(conn.provider).push(conn);
   }
 
-  // 只保留「有签到实现」的渠道 —— 权威来自 checkinProviders，不另抄名单。
+  // Keep only providers that "have a check-in implementation" — the authority is checkinProviders, no separate copied list.
   const timezoneId = resolveIanaTimezone();
   const channels = [];
   const totals = { accounts: 0, claimed: 0, alreadyClaimed: 0, failed: 0, inactive: 0, credit: 0 };
   const today = utc8DateString(now);
 
   for (const [provider, pool] of byProvider) {
-    // 若用户显式配置了渠道集合，则只跑被勾选的那些 —— **但 `only` 例外**。
+    // If the user explicitly configured a set of providers, only run the checked ones —
+    // **but `only` is an exception**.
     //
-    // ⚠️ `only` 代表用户**刚刚在面板上点了这个渠道的「立即签到」**，是显式操作，
-    // 必须放行（与 `force` 放行「今日已跑」同一口径）。不加这个例外，
-    // 「配置里只勾了 A、却去点 B 的按钮」会被静默过滤成 0 个账号，
-    // 界面显示「没有可签到的账号」—— 看起来像没账号，其实是配置挡住了。
+    // ⚠️ `only` means the user **just clicked "check in now" for this provider in the
+    // panel**, which is an explicit action and must be allowed through (same rule as
+    // `force` allowing "already ran today"). Without this exception, "the config only
+    // checks A, yet the user clicks B's button" would be silently filtered down to 0
+    // accounts, and the UI would show "no accounts to check in" — it looks like there
+    // are no accounts, when in fact the config blocked them.
     const explicitlyRequested = Array.isArray(only) && only.includes(provider);
     if (!explicitlyRequested && optedIn.length > 0 && !optedIn.includes(provider)) continue;
 
@@ -271,7 +292,7 @@ export async function runCheckin({ force = false, only = null, now = Date.now(),
             notes.push(`${conn.name || conn.id}: ${describeOutcome(outcome)}`);
         }
       } catch (error) {
-        // 单账号异常绝不能中断整轮。
+        // A single account's exception must never abort the whole round.
         channel.failed += 1;
         totals.failed += 1;
         notes.push(`${conn.name || conn.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -302,11 +323,12 @@ export async function runCheckin({ force = false, only = null, now = Date.now(),
 }
 
 /**
- * 整轮汇总。
+ * Whole-round summary.
  *
- * ⚠️ 输出是**英文**：这段文字会直接进 `docker logs`、API 响应与状态文件，
- * 而运行时 i18n 只翻译「英文原文」（src/i18n/runtime.js），中文永远不会被翻译。
- * 维护者向的说明仍写中文注释（渲染不到）。
+ * ⚠️ The output is **English**: this text goes directly into `docker logs`, API
+ * responses and the state file, and the runtime i18n only translates "English source
+ * text" (src/i18n/runtime.js); Chinese would never be translated. Maintainer-facing
+ * explanations are still written as Chinese comments (they never get rendered).
  */
 function buildSummary(totals, channels) {
   if (totals.accounts === 0) return "No accounts to check in";
@@ -319,7 +341,7 @@ function buildSummary(totals, channels) {
   return parts.join(", ");
 }
 
-/** 供 UI 读的当前状态（含「今天是否已跑」）。 */
+/** Current state for the UI to read (including "did it run today"). */
 export async function getCheckinStatus(now = Date.now()) {
   const settings = await getSettings();
   const config = settings.autoCheckin || {};
@@ -334,7 +356,7 @@ export async function getCheckinStatus(now = Date.now()) {
   };
 }
 
-/** 手动跑一轮（用户显式操作，永远放行「今日已跑」判定）。 */
+/** Run a round manually (an explicit user action, always bypasses the "already ran today" check). */
 export async function runCheckinNow(options = {}) {
   const result = await runCheckin({ ...options, force: true });
   if (result.ok) {
@@ -343,23 +365,23 @@ export async function runCheckinNow(options = {}) {
       lastDate: result.marked ? result.date : previous.lastDate,
       lastAt: Date.now(),
       lastMarked: result.marked,
-      // 英文：`lastSummary` 会写进状态文件并经 API 返回（i18n 只翻英文原文）。
+      // English: `lastSummary` is written to the state file and returned via the API (i18n only translates English source text).
       lastSummary: `${result.marked ? "" : "NOT RECORDED · "}${result.summary}`,
       channels: result.channels.map((c) => ({ ...c })),
     };
     try {
       writeState(next);
     } catch {
-      // 写状态失败不该让结果丢失：调用方仍拿到本轮结果。
+      // A failed state write must not lose the result: the caller still gets this round's result.
     }
     result.state = next;
   }
   return result;
 }
 
-// ── 调度（对齐 quotaAutoPing 的形状：global 单例 + 可重配置） ─────────────────
+// ── Scheduling (mirrors quotaAutoPing's shape: global singleton + reconfigurable) ─────────────────
 
-/** 用 global 顶住 Next 的模块热重载，保证一个进程只有一个调度器。 */
+/** Use global to withstand Next's module hot-reload, ensuring one scheduler per process. */
 const g = (global.__checkinScheduler ??= {
   timer: null,
   interval: null,
@@ -368,7 +390,7 @@ const g = (global.__checkinScheduler ??= {
   lastRunAt: 0,
 });
 
-/** 停止调度器。 */
+/** Stop the scheduler. */
 export function stopCheckinScheduler() {
   if (g.timer) {
     clearTimeout(g.timer);
@@ -381,24 +403,25 @@ export function stopCheckinScheduler() {
 }
 
 /**
- * 启动/重配置调度器。
+ * Start/reconfigure the scheduler.
  *
- * 启动时延迟一段跑一轮；此后每 30 分钟检查一次（跨天时补跑，这样长期运行的
- * 容器不必等到重启才签第二天的到）。
+ * On startup, run a round after a delay; after that, check every 30 minutes (catching
+ * up across day boundaries, so a long-running container doesn't have to wait for a
+ * restart to check in for the next day).
  *
- * 幂等：已有定时器就直接返回（`instrumentation.js` 与 `initializeApp.js` 会各调一次）。
+ * Idempotent: if a timer already exists, return immediately (`instrumentation.js` and `initializeApp.js` each call this once).
  */
 export function configureCheckinScheduler(settings) {
   const config = settings?.autoCheckin;
   if (config?.enabled !== true) {
     stopCheckinScheduler();
-    logLine("开关未打开，未启动调度器");
+    logLine("switch not enabled, scheduler not started");
     return;
   }
 
-  // 已有定时器就不重复起（但每 tick 会重新读 settings，所以改配置会自然生效）。
+  // If a timer already exists, don't start another (but each tick re-reads settings, so config changes take effect naturally).
   if (g.timer || g.interval) {
-    logLine("调度器已在运行，跳过重复启动");
+    logLine("scheduler already running, skipping duplicate start");
     return;
   }
 
@@ -414,7 +437,7 @@ export function configureCheckinScheduler(settings) {
       const state = readState();
       const today = utc8DateString(now);
 
-      // 今天已经成功记过 ⇒ 什么都不做。
+      // Already successfully recorded for today ⇒ do nothing.
       if (state.lastDate === today && state.lastMarked) return;
 
       const current = await getSettings();
@@ -425,7 +448,7 @@ export function configureCheckinScheduler(settings) {
 
       const result = await runCheckin({ now });
       if (!result.ok) {
-        logLine(`本轮未完成：${result.message}`);
+        logLine(`round not completed: ${result.message}`);
         return;
       }
 
@@ -438,10 +461,10 @@ export function configureCheckinScheduler(settings) {
       };
       writeState(next);
       g.lastRunAt = now;
-      logLine(`${result.date} ${result.marked ? "" : "(未记入当日，下次重试) "}${result.summary}`);
+      logLine(`${result.date} ${result.marked ? "" : "(not recorded for the day, will retry) "}${result.summary}`);
     } catch (error) {
-      // fail-open：一轮出错绝不能杀掉调度循环。
-      logLine(`调度异常: ${error instanceof Error ? error.message : String(error)}`);
+      // fail-open: an error in one round must never kill the scheduling loop.
+      logLine(`scheduler error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       g.running = false;
     }
@@ -451,17 +474,17 @@ export function configureCheckinScheduler(settings) {
   g.timer = setTimeout(() => {
     g.timer = null;
     tick().catch(() => {});
-    // 跨天补跑：30 分钟粒度足以在日界后不久补上。
+    // Day-boundary catch-up: 30-minute granularity is enough to catch up shortly after the day rolls over.
     const EVERY_MS = 30 * 60 * 1000;
     g.interval = setInterval(() => { tick().catch(() => {}); }, EVERY_MS);
     if (g.interval.unref) g.interval.unref();
   }, delay);
   if (g.timer.unref) g.timer.unref();
 
-  logLine(`调度器已启动（延迟 ${delay}ms）`);
+  logLine(`scheduler started (delay ${delay}ms)`);
 }
 
-/** 仅供测试：清空调度器状态。 */
+/** For tests only: clear the scheduler state. */
 export function resetCheckinScheduler() {
   stopCheckinScheduler();
   g.running = false;
