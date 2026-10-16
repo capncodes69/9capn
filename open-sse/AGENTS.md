@@ -147,6 +147,27 @@ The CodeBuddy token is read from **`accessToken` → `refreshToken` → `apiKey`
 
 **Two traps when touching this:** the codebuddy branch deliberately does **not** check `authType`, because the same identity can arrive as `oauth` and as `apikey` and collapsing them is the goal (that is also why the `apiKey` fallback above is not optional); and the JWT decoder is **duplicated** inside `connectionsRepo.js` rather than imported from `lib/oauth/providerHelpers.js`, because the DB layer must not reach into the OAuth layer. Both dedup paths, the synthetic fallbacks and the PAT exchange are pinned by `tests/unit/qoder-codebuddy-dedup.test.js`.
 
+## CodeBuddy intl channel verification
+
+`www.codebuddy.ai` (and the `workbuddy.ai` brand host) gates chat on a **header family the official IDE sends**: a request without `X-Conversation-ID`, `X-Conversation-Request-ID` and `X-Conversation-Message-ID` is answered `HTTP 400 code 11128 "conversation id missing"`, with `displayTips` saying the call "failed channel verification". The gate appeared on 2026-10-15 and broke **every** `cbai/*` request until the family was sent. `codebuddy-cn` (copilot.tencent.com) is not gated.
+
+`CodeBuddyIntlExecutor.buildHeaders` attaches the family (`withConversationHeaders` in `open-sse/executors/codebuddy-intl.js`):
+
+- **All three headers are required.** Measured A/B against the live gateway: any two of them are still answered `11128`.
+- **`X-Request-ID` is not required** — it mirrors the message id because the official client sends it.
+- `X-Conversation-ID` is derived stably from the session key (or the opening user message) so retries and later turns keep it; the per-call ids are fresh, and a **second pass over the same bag does not rotate them** (a retry must reuse the pair).
+- Reads and writes are **case-insensitive** — a caller's `x-conversation-id` is found, not shadowed by a duplicate that undici would join into `"caller, ours"`.
+- `buildHeaders` **fails closed**: an unexpected failure throws a message that names the gate, because a request without the family is refused every time and a silent fall-through would be a 100%-failure with no cause.
+- `parseError` recognises the gate and names it. Code `11128` is **overloaded** — it also carries `"first message is not system prompt"` (a body-shape problem fixed in `transformRequest`), so the branch keys on the **message**, never the code alone.
+
+**The gate can change without any code change here.** Unit tests mock the gateway, so they cannot see it. Run the live smoke test when touching this provider, or on a schedule:
+
+```
+CODEBUDDY_INTL_TOKEN=<token> node scripts/test-codebuddy-intl-channel.mjs
+```
+
+Exit `0` = family accepted · `1` = the gate rejected it (required headers changed — re-measure) · `2` = probe could not run. It makes one tiny real inference call, so do not loop it against a metered account.
+
 ## Pitfalls
 
 - A `registry/{id}.js` entry is in the **client** bundle (`src/shared/constants/providers.js` → dashboard shell). Import only *import-free* modules from it (e.g. `shared/camberCatalog.js`); importing a wire layer drags `proxyFetch` in, and `next build` then **fails** on `Module not found: Can't resolve 'net'` / `UnhandledSchemeError: node:assert` — the Fly deploy runs that build, so this is a deploy-blocker, not a warning. `tests/unit/camber-wiring.test.js` guards every file in the directory.

@@ -281,3 +281,63 @@ describe("parseError classifies the 11128 variants", () => {
     expect(out.resetsAtMs).toBeGreaterThan(0);
   });
 });
+
+// buildHeaders fails CLOSED. A request without the family is refused by the
+// gateway every time, so a silent fall-through would turn a bug into a
+// 100%-failure with no cause; the throw must name the gate instead.
+describe("buildHeaders fails closed when the family cannot be attached", () => {
+  const exec = new CodeBuddyIntlExecutor();
+  const url = "https://www.codebuddy.ai/v2/chat/completions";
+
+  it("throws a message that names the gate, not a bare TypeError", () => {
+    const realKeys = Object.keys;
+    try {
+      // Simulate any unexpected failure inside withConversationHeaders.
+      Object.keys = () => { throw new Error("simulated hostile headers"); };
+      let caught = null;
+      try {
+        exec.buildHeaders({ accessToken: "x" }, true, url, "m", { messages: [] });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught.message).toMatch(/channel verification/i);
+      expect(caught.message).toMatch(/X-Conversation/);
+      expect(caught.message).toMatch(/11128/);
+    } finally {
+      Object.keys = realKeys;
+    }
+  });
+
+  it("returns the family normally when nothing goes wrong", () => {
+    const h = exec.buildHeaders({ accessToken: "x" }, true, url, "m", { messages: [] });
+    expect(h["X-Conversation-ID"]).toBeTruthy();
+  });
+});
+
+// The per-request ids are fresh per *call*, and a re-run over an already-built
+// bag must NOT rotate them: base.js builds headers once per attempt and retries
+// the same attempt on 429/network, where a stable pair is what the gateway
+// expects. Pinned so this deliberate choice cannot change unnoticed.
+describe("idempotency of a second pass over the same header bag", () => {
+  const url = "https://www.codebuddy.ai/v2/chat/completions";
+  const body = { messages: [{ role: "user", content: "hi" }] };
+
+  it("keeps the conversation and per-call ids when re-run on the same bag", () => {
+    const first = withConversationHeaders({}, url, body);
+    const second = withConversationHeaders({ ...first }, url, body);
+    expect(second["X-Conversation-ID"]).toBe(first["X-Conversation-ID"]);
+    expect(second["X-Conversation-Request-ID"]).toBe(first["X-Conversation-Request-ID"]);
+    expect(second["X-Conversation-Message-ID"]).toBe(first["X-Conversation-Message-ID"]);
+    expect(second["X-Request-ID"]).toBe(first["X-Request-ID"]);
+  });
+
+  it("rotates the per-call ids between separate builds", () => {
+    const a = withConversationHeaders({}, url, body);
+    const b = withConversationHeaders({}, url, body);
+    // same conversation (same opening message), different call ids
+    expect(b["X-Conversation-ID"]).toBe(a["X-Conversation-ID"]);
+    expect(b["X-Conversation-Request-ID"]).not.toBe(a["X-Conversation-Request-ID"]);
+    expect(b["X-Conversation-Message-ID"]).not.toBe(a["X-Conversation-Message-ID"]);
+  });
+});

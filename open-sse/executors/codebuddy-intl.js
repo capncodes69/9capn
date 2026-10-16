@@ -164,12 +164,25 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
   // The intl gateway's channel verification rejects requests that don't carry
   // the X-Conversation-* family the official IDE sends on every turn. The
   // derivation/shape rules live in withConversationHeaders above.
+  //
+  // **Fail closed, not open.** buildHeaders runs OUTSIDE the fetch try/catch in
+  // base.js, so a throw here surfaces as a generic 502 with no cause. Left
+  // unguarded, an unexpected error would instead be *silent* if it fell through
+  // to "send without the family" — and a request without the family is refused
+  // by the gateway every time, so silently dropping it is the worst outcome. If
+  // the family cannot be attached, fail with a message that names the gate.
   buildHeaders(credentials, stream = true, url, model, body = null) {
-    return withConversationHeaders(
-      super.buildHeaders(credentials, stream, url, model, body),
-      url,
-      body,
-    );
+    const headers = super.buildHeaders(credentials, stream, url, model, body);
+    try {
+      return withConversationHeaders(headers, url, body);
+    } catch (error) {
+      throw new Error(
+        `CodeBuddy channel verification: could not attach the X-Conversation-* family `
+        + `(${error?.message || error}). The intl gateway rejects any request without it `
+        + `(HTTP 400 code 11128 "conversation id missing"), so this request cannot succeed. `
+        + `See open-sse/executors/codebuddy-intl.js.`,
+      );
+    }
   }
 
   transformRequest(model, body, stream, credentials) {
