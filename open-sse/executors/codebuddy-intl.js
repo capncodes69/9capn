@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { DefaultExecutor } from "./default.js";
 
 /**
@@ -29,50 +29,108 @@ function stableUuidFrom(key) {
   ].join("-");
 }
 
+// RFC-4122-v7 UUID (time-ordered). The WorkBuddy brand host takes hyphen-less
+// v7 ids for the two per-call ids; the default host takes the dashed v4 shape
+// of randomUUID below.
+function uuidV7() {
+  const bytes = randomBytes(16);
+  bytes.writeUIntBE(Date.now(), 0, 6);
+  bytes[6] = (bytes[6] & 0x0f) | 0x70;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
+
+// www.workbuddy.ai is the same gateway under its second brand host.
+function isWorkBuddyHost(url) {
+  try {
+    return /(?:^|\.)workbuddy\.ai$/.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attach the conversation-correlation family the gateway's channel
+ * verification demands (HTTP 400 code 11128 "conversation id missing" without
+ * it). Values that already exist and are non-empty are preserved, so a caller
+ * tracking its own conversation keeps it; blank values count as absent.
+ *
+ * - `X-Conversation-ID`: derived stably from the session key (or the opening
+ *   user message), so retries of a turn and later turns of one conversation
+ *   keep the id; a fresh UUID when nothing is derivable.
+ * - `X-Conversation-Request-ID` / `X-Conversation-Message-ID`: fresh per
+ *   request, and `X-Request-ID` mirrors the message id.
+ *
+ * The per-call shapes follow what each brand host was measured to accept:
+ * workbuddy.ai takes hyphen-less v7, codebuddy.ai the dashed v4. Only the
+ * intl executor grows these headers — codebuddy-cn is not gated.
+ */
+export function withConversationHeaders(headers, url, body = null) {
+  const has = (name) => typeof headers[name] === "string" && headers[name].trim() !== "";
+  const workbuddy = isWorkBuddyHost(url);
+  const freshCallId = () => (workbuddy ? uuidV7().replace(/-/g, "") : randomUUID());
+
+  const sessionKey =
+    (typeof body?.session_id === "string" && body.session_id) ||
+    (typeof body?.prompt_cache_key === "string" && body.prompt_cache_key) ||
+    (typeof body?.conversation_id === "string" && body.conversation_id) ||
+    null;
+  const firstUser = Array.isArray(body?.messages)
+    ? body.messages.find((m) => m?.role === "user")
+    : null;
+  const userText =
+    typeof firstUser?.content === "string"
+      ? firstUser.content
+      : Array.isArray(firstUser?.content)
+        ? firstUser.content
+            .map((b) => (b && typeof b.text === "string" ? b.text : ""))
+            .join("\n")
+        : "";
+  const conversationKey = sessionKey || (userText ? `cbai:${userText}` : null);
+
+  if (!has("X-Conversation-ID")) {
+    headers["X-Conversation-ID"] = conversationKey
+      ? stableUuidFrom(conversationKey)
+      : workbuddy
+        ? uuidV7()
+        : randomUUID();
+  }
+  if (!has("X-Conversation-Request-ID")) {
+    headers["X-Conversation-Request-ID"] = freshCallId();
+  }
+  // The request id mirrors the message id: reuse whichever side already exists.
+  const messageId = has("X-Conversation-Message-ID")
+    ? headers["X-Conversation-Message-ID"]
+    : has("X-Request-ID")
+      ? headers["X-Request-ID"]
+      : freshCallId();
+  if (!has("X-Conversation-Message-ID")) headers["X-Conversation-Message-ID"] = messageId;
+  if (!has("X-Request-ID")) headers["X-Request-ID"] = messageId;
+
+  return headers;
+}
+
 export class CodeBuddyIntlExecutor extends DefaultExecutor {
   constructor() {
     super("codebuddy-intl");
   }
 
-  // Upstream "channel verification" (HTTP 400 code 11128 "conversation id
-  // missing", 9router #4892): the intl gateway now rejects any request that
-  // does not carry the X-Conversation-* header family the official IDE sends
-  // on every turn — a conversation id derived stably from the session key,
-  // plus fresh UUIDs for the request and the message. Verified A/B against
-  // the live upstream: same credentials and body, headers absent -> 11128,
-  // headers present -> 200 SSE. codebuddy-cn (copilot.tencent.com) is not
-  // gated yet, so only the intl executor grows these headers.
+  // The intl gateway's channel verification rejects requests that don't carry
+  // the X-Conversation-* family the official IDE sends on every turn. The
+  // derivation/shape rules live in withConversationHeaders above.
   buildHeaders(credentials, stream = true, url, model, body = null) {
-    const headers = super.buildHeaders(credentials, stream, url, model, body);
-
-    // Stable per-conversation id: prefer whatever session key the client sent,
-    // else derive from the opening user message (stable across retries of the
-    // same turn and across accounts), else fall back to a random UUID.
-    const sessionKey =
-      (typeof body?.session_id === "string" && body.session_id) ||
-      (typeof body?.prompt_cache_key === "string" && body.prompt_cache_key) ||
-      (typeof body?.conversation_id === "string" && body.conversation_id) ||
-      null;
-    const firstUser = Array.isArray(body?.messages)
-      ? body.messages.find((m) => m?.role === "user")
-      : null;
-    const userText =
-      typeof firstUser?.content === "string"
-        ? firstUser.content
-        : Array.isArray(firstUser?.content)
-          ? firstUser.content
-              .map((b) => (b && typeof b.text === "string" ? b.text : ""))
-              .join("\n")
-          : "";
-    const conversationKey = sessionKey || (userText ? `cbai:${userText}` : null);
-
-    headers["X-Conversation-ID"] = conversationKey
-      ? stableUuidFrom(conversationKey)
-      : randomUUID();
-    headers["X-Conversation-Request-ID"] = randomUUID();
-    headers["X-Conversation-Message-ID"] = randomUUID();
-
-    return headers;
+    return withConversationHeaders(
+      super.buildHeaders(credentials, stream, url, model, body),
+      url,
+      body,
+    );
   }
 
   transformRequest(model, body, stream, credentials) {
