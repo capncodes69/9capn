@@ -43,10 +43,7 @@ function sanitize(c) {
   return safe;
 }
 
-// Exported for tests: the dashboard's quota-card gate must agree with the gate
-// in /api/usage/[connectionId], and a divergence is invisible until a user clicks
-// a card that then refuses to load.
-export function isUsageEligible(connection) {
+function isUsageEligible(connection) {
   // Mirrors the gate in /api/usage/[connectionId]: an OAuth row, or a static
   // bearer (apikey / api_key / access_token) on a provider that meters one. The
   // two lists have to agree — this one decides whether the dashboard *shows* a

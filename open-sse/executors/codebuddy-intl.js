@@ -109,7 +109,7 @@ function writeHeader(headers, name, value) {
  *
  * Only the intl executor grows these headers — codebuddy-cn is not gated.
  */
-export function withConversationHeaders(headers, url, body = null) {
+function withConversationHeaders(headers, url, body = null) {
   const workbuddy = isWorkBuddyHost(url);
   const freshCallId = () => (workbuddy ? uuidV7().replace(/-/g, "") : randomUUID());
 

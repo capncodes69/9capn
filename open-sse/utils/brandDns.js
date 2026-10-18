@@ -32,12 +32,11 @@ const PUBLIC_DNS_SERVERS = ["1.1.1.1", "1.0.0.1", "8.8.8.8"];
 const BLOCKED_IPS = new Set(["0.0.0.0", "0.0.0.1", "127.0.0.1", "::", "::1"]);
 const dnsCache = new Map(); // host -> { ip, expires }
 
-/** True for the CodeBuddy / WorkBuddy hosts (any subdomain). */
-export function isBrandHost(hostname) {
+function isBrandHost(hostname) {
   return BRAND_HOST_RE.test(String(hostname || "").trim().toLowerCase());
 }
 
-/** Same test for a full URL, for the fetch path that only has one. */
+/** True for a brand URL — the only entry point proxyFetch needs. */
 export function isBrandHostUrl(url) {
   try {
     return isBrandHost(new URL(url).hostname);
@@ -58,7 +57,7 @@ function usableAddress(addresses) {
  * path pays for one lookup, not one per call; failures are never cached, so a
  * blip cannot outlive itself.
  */
-export async function resolveBrandIp(host) {
+async function resolveBrandIp(host) {
   const key = String(host || "").trim().toLowerCase();
   const cached = dnsCache.get(key);
   if (cached && Date.now() < cached.expires) return cached.ip;
@@ -85,7 +84,7 @@ export async function resolveBrandIp(host) {
  * the pinned address has to come back in the array shape as well; the single
  * shape is kept for the callers that ask without `all`.
  */
-export function brandLookup(hostname, options, callback) {
+function brandLookup(hostname, options, callback) {
   if (!isBrandHost(hostname)) return dns.lookup(hostname, options, callback);
   resolveBrandIp(hostname).then(
     (ip) => {
@@ -115,9 +114,4 @@ export function getBrandDispatcher() {
       });
   }
   return dispatcherPromise;
-}
-
-/** Test helper: forget cached answers so each case starts from a clean slate. */
-export function clearBrandDnsCache() {
-  dnsCache.clear();
 }

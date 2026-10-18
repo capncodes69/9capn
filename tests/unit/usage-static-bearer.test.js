@@ -126,28 +126,38 @@ describe("/api/usage/[connectionId] accepts every static-bearer authType", () =>
 });
 
 describe("/api/providers/client agrees with the usage route", () => {
-  // The dashboard reads this to decide whether to render a quota card.
-  async function isEligible(conn) {
-    const mod = await import("@/app/api/providers/client/route.js");
-    return mod.isUsageEligible(conn);
+  // The dashboard reads this endpoint to decide whether to render a quota card.
+  // Driving GET rather than importing the helper keeps the helper private — it is
+  // an implementation detail, and the contract that matters is the response.
+  async function eligibleProviders(connections) {
+    mocks.getProviderConnections.mockResolvedValue(connections);
+    const { GET } = await import("@/app/api/providers/client/route.js");
+    const request = new Request("https://9router.local/api/providers/client?pageSize=100");
+    const response = await GET(request);
+    const body = await response.json();
+    return new Set((body.connections || []).map((c) => c.id));
   }
 
-  it("marks an access_token connection on a usageApikey provider eligible", async () => {
-    expect(await isEligible(connection({
-      authType: "access_token", accessToken: "t", apiKey: null,
-    }))).toBe(true);
+  it("shows a quota card for an access_token connection on a usageApikey provider", async () => {
+    const ids = await eligibleProviders([
+      connection({ id: "at", authType: "access_token", accessToken: "t", apiKey: null }),
+    ]);
+    expect(ids.has("at")).toBe(true);
   });
 
-  it("marks the same shapes ineligible that the usage route refuses", async () => {
-    // codex + access_token: the usage route refuses it, so the card must not show.
-    expect(await isEligible(connection({
-      provider: "codex", authType: "access_token", accessToken: "t", apiKey: null,
-    }))).toBe(false);
+  it("hides the card for a shape the usage route would refuse", async () => {
+    // codex + access_token: /api/usage answers "Usage not available", so the
+    // dashboard must not advertise a card for it.
+    const ids = await eligibleProviders([
+      connection({ id: "cx", provider: "codex", authType: "access_token", accessToken: "t", apiKey: null }),
+    ]);
+    expect(ids.has("cx")).toBe(false);
   });
 
-  it("keeps an oauth connection eligible regardless of provider list", async () => {
-    expect(await isEligible(connection({
-      provider: "codex", authType: "oauth", accessToken: "t", apiKey: null,
-    }))).toBe(true);
+  it("keeps an oauth connection visible regardless of the provider list", async () => {
+    const ids = await eligibleProviders([
+      connection({ id: "oa", provider: "codex", authType: "oauth", accessToken: "t", apiKey: null }),
+    ]);
+    expect(ids.has("oa")).toBe(true);
   });
 });
