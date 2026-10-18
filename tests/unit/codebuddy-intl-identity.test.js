@@ -1,5 +1,6 @@
-// CodeBuddy intl identity: the profile lookup that fills an email in, and the
-// dedup guard that stops a re-import from creating a second row for one account.
+// CodeBuddy intl identity: the JWT claims are the only source (the gateway has
+// no profile route — 22 plausible paths were probed and none answered JSON), and
+// the dedup guard that stops a re-import from creating a second row.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -71,101 +72,67 @@ describe("codebuddy-intl mapTokens", () => {
     expect(mapped.name).toBe("cb-u-no-ema"); // "cb-" + first 8 chars of the sub
   });
 
-  it("prefers token claims over the profile lookup", async () => {
-    const { default: intl } = await import("@/lib/oauth/providers/codebuddy-intl.js");
-    const mapped = intl.mapTokens({
-      access_token: makeJwt({ sub: "u-2", email: "token@example.com", preferred_username: "tokuser" }),
-      refresh_token: "",
-      expires_in: 3600,
-      _profile: { email: "profile@example.com", username: "profileuser", displayName: "Profile Name" },
-    });
-    expect(mapped.email).toBe("token@example.com");
-    expect(mapped.providerSpecificData.username).toBe("tokuser");
-    // The profile only contributes what the token omitted.
-    expect(mapped.displayName).toBe("Profile Name");
-  });
-
-  it("uses the profile when the token carries no identity", async () => {
+  it("reads identity off the refresh token when the access token is opaque", async () => {
     const { default: intl } = await import("@/lib/oauth/providers/codebuddy-intl.js");
     const mapped = intl.mapTokens({
       access_token: "opaque-not-a-jwt",
-      refresh_token: "",
+      refresh_token: makeJwt({ sub: "u-rt", email: "rt@example.com", preferred_username: "rtuser" }),
       expires_in: 3600,
-      _profile: { email: "from-profile@example.com", username: "puser", userId: "p-1" },
     });
-    expect(mapped.email).toBe("from-profile@example.com");
-    expect(mapped.providerSpecificData.userId).toBe("p-1");
+    expect(mapped.email).toBe("rt@example.com");
+    expect(mapped.name).toBe("rtuser");
+    expect(mapped.providerSpecificData.userId).toBe("u-rt");
   });
 });
 
-// ── pollToken: profile lookup is best-effort ───────────────────────────────
+// ── pollToken: one request, no profile lookup ──────────────────────────────
 
-describe("codebuddy-intl pollToken profile lookup", () => {
+describe("codebuddy-intl pollToken", () => {
   const config = {
     tokenUrl: "https://www.codebuddy.ai/v2/plugin/auth/token",
     userAgent: "IDE/test",
   };
 
-  it("attaches the profile when the gateway answers it", async () => {
+  it("makes exactly one request — the gateway has no profile route to call", async () => {
     const { default: intl } = await import("@/lib/oauth/providers/codebuddy-intl.js");
-    const fetchMock = vi.fn(async (url) => {
-      if (String(url).includes("/v2/plugin/auth/token")) {
-        return new Response(JSON.stringify({
-          code: 0,
-          data: { accessToken: makeJwt({ sub: "u-3", email: "three@example.com" }), refreshToken: "rt" },
-        }), { status: 200 });
-      }
-      if (String(url).includes("/v2/plugin/auth/user")) {
-        return new Response(JSON.stringify({
-          code: 0,
-          data: { email: "three@example.com", nickname: "Three", organizationId: "org-1" },
-        }), { status: 200 });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({
+        code: 0,
+        data: { accessToken: makeJwt({ sub: "u-3", email: "three@example.com" }), refreshToken: "rt" },
+      }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await intl.pollToken(config, "state-1", null, {});
     expect(result.ok).toBe(true);
-    expect(result.data._profile.email).toBe("three@example.com");
-    expect(result.data._profile.organizationId).toBe("org-1");
-
-    const mapped = intl.mapTokens(result.data);
-    expect(mapped.providerSpecificData.organizationId).toBe("org-1");
+    // A second call would be a request to an endpoint that does not exist; 22
+    // plausible paths were probed and none answered JSON.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(intl.mapTokens(result.data).email).toBe("three@example.com");
   });
 
-  it("still logs in when the profile lookup fails", async () => {
+  it("keeps the brand host the device code was issued on", async () => {
     const { default: intl } = await import("@/lib/oauth/providers/codebuddy-intl.js");
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      if (String(url).includes("/v2/plugin/auth/token")) {
-        return new Response(JSON.stringify({
-          code: 0,
-          data: { accessToken: makeJwt({ sub: "u-4", email: "four@example.com" }), refreshToken: "rt" },
-        }), { status: 200 });
-      }
-      // Profile endpoint down, malformed, or gated — none of it may block login.
-      return new Response("nope", { status: 500 });
-    }));
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({
+        code: 0,
+        data: { accessToken: makeJwt({ sub: "u-6" }), refreshToken: "rt" },
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
-    const result = await intl.pollToken(config, "state-2", null, {});
-    expect(result.ok).toBe(true);
-    expect(intl.mapTokens(result.data).email).toBe("four@example.com");
+    // The caller does not repeat `domain` on the poll; the hint from the
+    // device-code response has to carry it, or the poll lands on the wrong brand.
+    await intl.pollToken(config, "state-4", null, { _brandHost: "www.workbuddy.ai" });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("www.workbuddy.ai");
   });
 
-  it("does not throw when the profile request itself rejects", async () => {
+  it("reports authorization_pending without treating it as a failure", async () => {
     const { default: intl } = await import("@/lib/oauth/providers/codebuddy-intl.js");
-    vi.stubGlobal("fetch", vi.fn(async (url) => {
-      if (String(url).includes("/v2/plugin/auth/token")) {
-        return new Response(JSON.stringify({
-          code: 0,
-          data: { accessToken: makeJwt({ sub: "u-5" }), refreshToken: "rt" },
-        }), { status: 200 });
-      }
-      throw new Error("ECONNRESET");
-    }));
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ code: 11217, msg: "login ing..." }), { status: 200 })));
 
-    const result = await intl.pollToken(config, "state-3", null, {});
+    const result = await intl.pollToken(config, "state-5", null, {});
     expect(result.ok).toBe(true);
+    expect(result.data.error).toBe("authorization_pending");
   });
 });
 
