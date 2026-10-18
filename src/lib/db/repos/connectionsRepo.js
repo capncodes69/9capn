@@ -2,6 +2,52 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
+// The DB layer must not reach into the OAuth layer for this, so the decoder is
+// duplicated here rather than imported from `lib/oauth/providerHelpers`. It is
+// only used to read the *identity* claims (sub/email/preferred_username) off a
+// CodeBuddy token — never to trust anything else in the payload.
+function decodeJwtPayload(token) {
+  try {
+    if (!token || typeof token !== "string") return null;
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// A CodeBuddy token can arrive in three places depending on how the row was
+// created: the device flow stores it as `accessToken` (+ a refresh token), while
+// API-key mode pastes the same JWT into `apiKey`, which the executor sends as the
+// bearer. All three are read, or the same account dedups on one path and stacks
+// rows on the other.
+function findCodeBuddyJwt(data) {
+  return decodeJwtPayload(data?.accessToken)
+    || decodeJwtPayload(data?.refreshToken)
+    || decodeJwtPayload(data?.apiKey);
+}
+
+const CODEBUDDY_PROVIDERS = new Set(["codebuddy-intl", "codebuddy-cn"]);
+
+/**
+ * Identity for a CodeBuddy connection: the token's `sub` when present, else its
+ * email, else whatever the caller supplied. Returns `null` when nothing at all is
+ * available, which means "cannot prove this is a duplicate" — the insert then
+ * proceeds, so a row without an identity is never silently merged into another.
+ */
+function codeBuddyIdentity(data) {
+  const jwt = findCodeBuddyJwt(data);
+  return jwt?.sub || data?.providerSpecificData?.userId || null;
+}
+
+function codeBuddyEmail(data) {
+  const jwt = findCodeBuddyJwt(data);
+  return data?.email || jwt?.email || null;
+}
+
 const OPTIONAL_FIELDS = [
   "displayName", "email", "globalPriority", "defaultModel",
   "accessToken", "refreshToken", "expiresAt", "tokenType",
@@ -86,6 +132,14 @@ function deriveConnectionName(data, fallbackName) {
       || data.providerSpecificData?.githubName
       || fallbackName;
   }
+  if (CODEBUDDY_PROVIDERS.has(data.provider)) {
+    const jwt = findCodeBuddyJwt(data);
+    return jwt?.preferred_username
+      || jwt?.email
+      || data.displayName
+      || data.email
+      || fallbackName;
+  }
   return fallbackName;
 }
 
@@ -143,7 +197,12 @@ export async function createProviderConnection(data) {
     // (O(pool) per key — the other half of the import cost in #4311). The oauth
     // branch below still scans, because its identity rules compare fields
     // inside providerSpecificData and have no single-column equivalent.
-    const isApikey = data.authType === "apikey" && !!data.name;
+    //
+    // CodeBuddy is excluded from the narrow query: its identity is matched
+    // across *both* authTypes (a JWT pasted as an API key and the same JWT from
+    // the device flow are one account), which a `authType = 'apikey'` filter
+    // cannot see. Its pools are small, so the full scan is the right trade.
+    const isApikey = data.authType === "apikey" && !!data.name && !CODEBUDDY_PROVIDERS.has(data.provider);
     const all = isApikey
       ? db.all(
           `SELECT * FROM providerConnections WHERE provider = ? AND authType = ? AND name = ?`,
@@ -155,7 +214,29 @@ export async function createProviderConnection(data) {
       : all.length;
 
     let existing = null;
-    if (data.authType === "oauth" && data.email) {
+
+    // CodeBuddy answers the device flow with a JWT and no profile object, so a
+    // re-login often arrives with no `email` at all. The generic oauth branch
+    // below is gated on `data.email`, so those re-logins fell through and every
+    // import of the same account added another row — the second one then
+    // shadowed the first on rotation. Identify on the token instead.
+    if (CODEBUDDY_PROVIDERS.has(data.provider)) {
+      const incomingSub = codeBuddyIdentity(data);
+      const incomingEmail = codeBuddyEmail(data);
+      existing = all.find(c => {
+        if (c.provider !== data.provider) return false;
+        const rowSub = codeBuddyIdentity(c);
+        // `sub` is the stable account id: two rows with the same one are the
+        // same account regardless of how the credential was stored.
+        if (incomingSub && rowSub) return incomingSub === rowSub;
+        // One side has no `sub` (an older row, or an opaque token): fall back to
+        // email, but only when both sides actually have one — collapsing onto a
+        // bare-email row would overwrite the account that owned it.
+        const rowEmail = codeBuddyEmail(c);
+        if (incomingEmail && rowEmail) return incomingEmail === rowEmail;
+        return false;
+      });
+    } else if (data.authType === "oauth" && data.email) {
       const incomingUsername = data.providerSpecificData?.username;
       const incomingWs = data.providerSpecificData?.chatgptAccountId;
       existing = all.find(c => {
