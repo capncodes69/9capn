@@ -365,6 +365,37 @@ export const PROVIDER_CAPABILITIES = {
   },
 };
 
+// Qoder model capability table. The model ids are opaque (`dmodel`, `kmodel`,
+// `qmodel_38max`), so the name heuristics in PATTERN_CAPABILITIES match none of
+// them — without this table every Qoder model is reported text-only and an
+// image sent by a client is replaced by a placeholder before it ever reaches
+// the model. Context/output limits mirror what /algo/api/v2/model/list reports.
+PROVIDER_CAPABILITIES["qoder"] = {
+  // Tier aliases resolve to a variable target upstream; keep them text-only and
+  // on the default window rather than guessing.
+  "auto":         { contextWindow: 200000, maxOutput: 32768 },
+  "efficient":    { contextWindow: 200000, maxOutput: 32768 },
+  "lite":         { contextWindow: 200000, maxOutput: 32768 },
+  // Concrete ids read images back, so they are vision-capable.
+  "ultimate":     { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "performance":  { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "qmodel_38max": { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "qmodel_latest":{ vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "qmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "qfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "kmodel_latest":{ vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "kmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  "gmodel":       { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "gfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "dmodel":       { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "dfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  "mmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  // Frontier reasoning pair; absent from many per-account catalogs, so they are
+  // routed through a static model_config (see shared/qoder/constants.js).
+  "smodel":       { vision: true, reasoning: true, contextWindow: 180000, maxOutput: 65536 },
+  "cmodel":       { vision: true, reasoning: true, contextWindow: 180000, maxOutput: 65536 },
+};
+
 // Qoder CN serves the identical model catalog from the CN gateway, so it shares
 // the intl Qoder capability table verbatim (vision/reasoning/contextWindow).
 PROVIDER_CAPABILITIES["qoder-cn"] = PROVIDER_CAPABILITIES["qoder"];
