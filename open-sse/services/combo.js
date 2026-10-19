@@ -389,8 +389,15 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
         try { errorText = JSON.stringify(errorText); } catch { errorText = String(errorText); }
       }
 
-      // Check if should fallback to next model
-      const { shouldFallback, cooldownMs } = checkFallbackError(result.status, errorText);
+      // Check if should fallback to next model.
+      //
+      // The provider has to be passed through or a provider-scoped rule in
+      // ERROR_RULES never matches: checkFallbackError skips any rule whose
+      // `provider` differs from its fourth argument, and leaving that argument
+      // unset makes it null, so every scoped rule is dead on this path. `modelStr`
+      // is "provider/model", which is exactly the id those rules are keyed on.
+      const providerId = modelStr.includes("/") ? modelStr.split("/")[0] : null;
+      const { shouldFallback, cooldownMs } = checkFallbackError(result.status, errorText, 0, providerId);
 
       if (!shouldFallback) {
         log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });

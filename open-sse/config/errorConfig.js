@@ -68,6 +68,28 @@ export const ERROR_RULES = [
   { text: "capacity",                 backoff: true },
   { text: "overloaded",               backoff: true },
 
+  // codebuddy-intl refuses a call for two different reasons, and both arrive as
+  // HTTP 400 with code 11128 — which matches no rule above, so both used to fall
+  // through to the request-scoped catch-all in accountFallback.js and get
+  // `cooldownMs: 0`. That is right for a genuine per-request 400 and wrong here,
+  // because these two are provider-scoped: the identical payload succeeds again
+  // minutes later, and every session stays refused for the duration. With no
+  // cooldown the router re-fires into the refusal on every request, so it never
+  // gets the idle time it needs to expire.
+  //
+  //   "request illegal"        the gateway's WAF refusing the call outright.
+  //   "conversation id missing" the channel-verification gate (see
+  //                            open-sse/executors/codebuddy-intl.js). Sending the
+  //                            X-Conversation-* family removes the common cause;
+  //                            this rule keeps the backoff in place if the gate
+  //                            ever changes shape again.
+  //
+  // Match on TEXT, never on code alone: 11128 is overloaded and also carries
+  // "first message is not system prompt", which IS request-scoped (a body-shape
+  // bug, fixed in transformRequest) and must keep cooldownMs: 0.
+  { provider: "codebuddy-intl", text: "request illegal", backoff: true },
+  { provider: "codebuddy-intl", text: "conversation id missing", backoff: true },
+
   // --- Status-based rules (fallback when text doesn't match) ---
   { status: 401, cooldownMs: COOLDOWN.long },
   { status: 402, cooldownMs: COOLDOWN.long },
