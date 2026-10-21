@@ -28,10 +28,16 @@ export const QODER_MODEL_QUEUE_MAX_WAIT_ENV = "QODER_MODEL_QUEUE_MAX_WAIT_MS";
 // client request. The queue clears in ~30s windows, so 3 minutes covers several
 // of them and still returns a retryable error instead of hanging. Raise it with
 // QODER_MODEL_QUEUE_MAX_WAIT_MS when the caller can afford to wait.
-const DEFAULT_MAX_WAIT_MS = 180_000;
+const DEFAULT_MAX_WAIT_MS = 600_000;
 const DEFAULT_RETRY_MS = 30_000;
-const MIN_RETRY_MS = 500;
-const MAX_RETRY_MS = 30_000;
+// A sub-second floor came from qodercli, but Qoder's queue now answers
+// retryAfterSeconds:2 while still refusing the request. Replaying that fast
+// makes the throttle worse, so the floor is a full retry interval.
+const MIN_RETRY_MS = 15_000;
+const MAX_RETRY_MS = 60_000;
+// The queue-status endpoint can report isQueued:false while the inference call
+// is still refused, so its hint is not trusted below the default interval.
+const STATUS_HINT_FLOOR_MS = 30_000;
 
 const NESTED_KEYS = ["error", "data", "body", "message", "cause", "result", "payload"];
 
@@ -157,12 +163,23 @@ export function isQoderQueuedBody(input) {
 }
 
 /**
- * Delay before the next attempt, honouring the server's own hint.
- * qodercli clamps retryAfterSeconds to 500ms..30s.
+ * Delay before the next attempt.
+ *
+ * Two sources feed this and they are not equally trustworthy:
+ *
+ * - the **inference refusal** carries waitTime/retryAfterSeconds for the queue
+ *   the request actually sits in, so its hint is honoured;
+ * - the **queue-status endpoint** has been observed answering
+ *   `isQueued:false, retryAfterSeconds:2` while the inference call is still
+ *   refused. Replaying every 2s on that hint makes the throttle worse, so a
+ *   status-derived delay never drops below STATUS_HINT_FLOOR_MS.
+ *
+ * Both are clamped into MIN_RETRY_MS..MAX_RETRY_MS.
  */
-export function computeQoderQueueDelayMs(info) {
+export function computeQoderQueueDelayMs(info, { fromStatus = false } = {}) {
   const hint = toNumber(info?.retryAfterSeconds) ?? toNumber(info?.waitTime);
-  const ms = hint === undefined ? DEFAULT_RETRY_MS : hint * 1000;
+  let ms = hint === undefined ? DEFAULT_RETRY_MS : hint * 1000;
+  if (fromStatus) ms = Math.max(ms, STATUS_HINT_FLOOR_MS);
   return Math.min(MAX_RETRY_MS, Math.max(MIN_RETRY_MS, ms));
 }
 
