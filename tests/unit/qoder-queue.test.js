@@ -107,23 +107,37 @@ describe("isQoderQueuedBody", () => {
 });
 
 describe("computeQoderQueueDelayMs", () => {
-  it("honours retryAfterSeconds", () => {
+  it("honours retryAfterSeconds from the inference refusal", () => {
     expect(computeQoderQueueDelayMs({ retryAfterSeconds: 30 })).toBe(30_000);
-    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 12 })).toBe(12_000);
+    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 20 })).toBe(20_000);
   });
 
   it("falls back to waitTime when retryAfterSeconds is absent", () => {
-    expect(computeQoderQueueDelayMs({ waitTime: 17 })).toBe(17_000);
+    expect(computeQoderQueueDelayMs({ waitTime: 25 })).toBe(25_000);
   });
 
-  it("clamps to the 500ms..30s window", () => {
-    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 0 })).toBe(500);
-    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 600 })).toBe(30_000);
+  it("never replays faster than 15s, even on a tiny hint", () => {
+    // Qoder answers retryAfterSeconds:2 while still refusing; replaying that
+    // fast makes the throttle worse.
+    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 0 })).toBe(15_000);
+    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 2 })).toBe(15_000);
+  });
+
+  it("clamps the upper bound to 60s", () => {
+    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 600 })).toBe(60_000);
   });
 
   it("uses a 30s default when no hint is present", () => {
     expect(computeQoderQueueDelayMs(null)).toBe(30_000);
     expect(computeQoderQueueDelayMs({})).toBe(30_000);
+  });
+
+  it("raises a status-derived hint to 30s", () => {
+    // The queue-status endpoint has reported isQueued:false with
+    // retryAfterSeconds:2 while the inference call was still refused, so its
+    // hint is not trusted below one full interval.
+    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 2 }, { fromStatus: true })).toBe(30_000);
+    expect(computeQoderQueueDelayMs({ retryAfterSeconds: 45 }, { fromStatus: true })).toBe(45_000);
   });
 });
 
@@ -183,10 +197,10 @@ describe("parseQoderQueueStatus", () => {
 });
 
 describe("qoderQueueMaxWaitMs", () => {
-  it("defaults to 3 minutes", () => {
+  it("defaults to 10 minutes", () => {
     const prev = process.env.QODER_MODEL_QUEUE_MAX_WAIT_MS;
     delete process.env.QODER_MODEL_QUEUE_MAX_WAIT_MS;
-    expect(qoderQueueMaxWaitMs()).toBe(180_000);
+    expect(qoderQueueMaxWaitMs()).toBe(600_000);
     if (prev !== undefined) process.env.QODER_MODEL_QUEUE_MAX_WAIT_MS = prev;
   });
 
@@ -201,7 +215,7 @@ describe("qoderQueueMaxWaitMs", () => {
   it("ignores a nonsensical override", () => {
     const prev = process.env.QODER_MODEL_QUEUE_MAX_WAIT_MS;
     process.env.QODER_MODEL_QUEUE_MAX_WAIT_MS = "not-a-number";
-    expect(qoderQueueMaxWaitMs()).toBe(180_000);
+    expect(qoderQueueMaxWaitMs()).toBe(600_000);
     if (prev === undefined) delete process.env.QODER_MODEL_QUEUE_MAX_WAIT_MS;
     else process.env.QODER_MODEL_QUEUE_MAX_WAIT_MS = prev;
   });

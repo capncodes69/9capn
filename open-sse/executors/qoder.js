@@ -872,6 +872,9 @@ export class QoderExecutor extends BaseExecutor {
     const waitStartedAt = Date.now();
     let lastQueueInfo = null;
     let statusPollsEnabled = true;
+    // Guards the "status says ready" fast path: one free replay, then stop
+    // believing an endpoint that has already been contradicted.
+    let readyReplayUsed = false;
     // The queue is keyed by request_set_id, and qodercli keeps ONE request_id
     // for the whole recovery. A fresh id per replay makes the status poll look
     // at a queue entry nobody is waiting on, so it reports queued forever.
@@ -1005,14 +1008,26 @@ export class QoderExecutor extends BaseExecutor {
           // No usable status endpoint — keep the old timed-replay behaviour.
           statusPollsEnabled = false;
         } else if (polled.info.isQueued === false) {
-          // Model is ready; replay immediately with a fresh signature.
-          log?.info?.(
-            "QODER",
-            `model "${qoderKey}" ready (queueType=${polled.info.queueType || "?"}); replaying`,
-          );
-          delayMs = 0;
+          // The status endpoint says ready, but it has been observed saying that
+          // while the inference call is still refused. Replay once, and if that
+          // is refused too, stop trusting the endpoint and fall back to timed
+          // replays — otherwise we spin on a hint that will never be true.
+          if (readyReplayUsed) {
+            statusPollsEnabled = false;
+            log?.info?.(
+              "QODER",
+              `queue status claims ready but "${qoderKey}" is still refused; falling back to timed replays`,
+            );
+          } else {
+            readyReplayUsed = true;
+            log?.info?.(
+              "QODER",
+              `model "${qoderKey}" reported ready (queueType=${polled.info.queueType || "?"}); replaying`,
+            );
+            delayMs = 0;
+          }
         } else {
-          delayMs = computeQoderQueueDelayMs(polled.info);
+          delayMs = computeQoderQueueDelayMs(polled.info, { fromStatus: true });
           log?.info?.(
             "QODER",
             `model "${qoderKey}" still queued (queueType=${polled.info.queueType || "?"}, ` +
