@@ -35,3 +35,25 @@ tests/unit/mimo-free.live.test.js :: MiMo Free anti-abuse gate (live) chat WITH 
 # which is not part of this repository.
 tests/unit/db-benchmark.test.js :: <suite failed to load>
 tests/unit/embeddings.cloud.test.js :: <suite failed to load>
+
+# --- v0.5.109 (2026-10-23), all reproduced on a CLEAN upstream/master worktree ---
+# Upstream's own code returns `requestScoped` from checkFallbackError but these five
+# tests still expect the two-field shape. 5 failed / 6 passed on upstream f39d8f07
+# before this fork merged anything.
+tests/unit/codebuddy-block-backoff.test.js :: keeps the same text request-scoped for provider openai
+tests/unit/codebuddy-block-backoff.test.js :: keeps the same text request-scoped for provider codebuddy-cn
+tests/unit/codebuddy-block-backoff.test.js :: keeps the same text request-scoped for provider null
+tests/unit/codebuddy-block-backoff.test.js :: does not classify every 11128 code as a block
+tests/unit/codebuddy-block-backoff.test.js :: still stops a combo on a malformed CodeBuddy request
+
+# Golden header matrix: three providers upstream added/changed without recording the
+# snapshot. Same 7 failures on upstream f39d8f07.
+tests/translator/golden-url-header.test.js :: cline → headers (apiKey / oauth)
+tests/translator/golden-url-header.test.js :: clinepass → headers (apiKey / oauth)
+tests/translator/golden-url-header.test.js :: kimi → headers (apiKey / oauth)
+
+# Four unrelated upstream regressions, identical on upstream f39d8f07.
+tests/unit/cli-connect.test.js :: each tool inherits its OWN server model, falling back to OpenCode's
+tests/unit/combo-credit-fallback.test.js :: routes a 400 response correctly: Bad request
+tests/unit/devin-cli-executor.test.js :: does not set XDG_CONFIG_HOME when DEVIN_MCP_SERVERS is absent
+tests/unit/headroom-responses-format.test.js :: skips Responses tool/reasoning history instead of collapsing it into a message (#2132)

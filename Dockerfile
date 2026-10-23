@@ -88,7 +88,10 @@ RUN mkdir -p /app/data && chown -R node:node /app && \
 
 # su-exec drops privileges after chowning the mounted volume: a Fly volume is
 # owned by root on first boot, and the node user must be able to write the DB.
-RUN apk add --no-cache su-exec && \
+# ffmpeg is a runtime dependency of the Codex STT handler (open-sse/handlers/
+# codexSttAudio.js spawns it), not part of the deploy shape — the Fly pieces stay
+# ours, the packages the product calls are the product's.
+RUN apk add --no-cache su-exec ffmpeg && \
   printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
