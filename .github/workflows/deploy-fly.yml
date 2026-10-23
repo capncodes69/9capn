@@ -1,7 +1,7 @@
-# Deploys the gateway to Fly.io (app `capn-router`; see fly.toml).
+# Deploys the gateway to Fly.io (app `9capnrouter`; see fly.toml).
 #
 # Required repository secret:
-#   FLY_API_TOKEN — deploy-scoped token: `fly tokens create deploy -a capn-router`
+#   FLY_API_TOKEN — deploy-scoped token: `fly tokens create deploy -a 9capnrouter`
 #   Add it with: gh secret set FLY_API_TOKEN
 #
 # Runtime secrets (JWT_SECRET, API_KEY_SECRET, INITIAL_PASSWORD, …) are set once
@@ -41,7 +41,7 @@ jobs:
         run: |
           if [ -z "$FLY_API_TOKEN" ]; then
             echo "::error::FLY_API_TOKEN is not set for this repository."
-            echo "::error::Create one with 'fly tokens create deploy -a capn-router', then add it under Settings -> Secrets and variables -> Actions."
+            echo "::error::Create one with 'fly tokens create deploy -a 9capnrouter', then add it under Settings -> Secrets and variables -> Actions."
             exit 1
           fi
 

@@ -1,6 +1,6 @@
 # Fly.io deployment for the 9router gateway.
 #
-#   First deploy:  fly apps create capn-router
+#   First deploy:  fly apps create 9capnrouter
 #                  fly volumes create capnrouter_data --size 3 --region sin
 #                  fly secrets set JWT_SECRET=... API_KEY_SECRET=... INITIAL_PASSWORD=...
 #                  fly deploy
@@ -10,7 +10,7 @@
 # The app name and volume name here must match the workflow, which deploys with
 # `--config fly.toml` and therefore inherits both.
 
-app = "capn-router"
+app = "9capnrouter"
 primary_region = "sin"
 
 [build]
