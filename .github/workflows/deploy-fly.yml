@@ -1,0 +1,56 @@
+# Deploys the gateway to Fly.io (app `9capnrouter`; see fly.toml).
+#
+# Required repository secret:
+#   FLY_API_TOKEN — deploy-scoped token: `fly tokens create deploy -a 9capnrouter`
+#   Add it with: gh secret set FLY_API_TOKEN
+#
+# Runtime secrets (JWT_SECRET, API_KEY_SECRET, INITIAL_PASSWORD, …) are set once
+# with `fly secrets set` and survive every deploy. They are deliberately absent
+# here: a workflow that carried them would put them in git.
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Queue instead of cancelling: a half-applied release is worse than a slightly
+  # stale one, so a newer push waits for the in-flight deploy to finish.
+  group: fly-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    # A fork has no FLY_API_TOKEN, so a push there would fail on a missing secret
+    # rather than on anything real.
+    if: github.repository_owner == 'capncodes69'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Require FLY_API_TOKEN
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::FLY_API_TOKEN is not set for this repository."
+            echo "::error::Create one with 'fly tokens create deploy -a 9capnrouter', then add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --remote-only builds on Fly's builders: the layer cache stays warm
+      # between runs and the Next.js build never touches the runner's disk.
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config fly.toml --remote-only

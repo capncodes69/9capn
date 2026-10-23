@@ -1,0 +1,59 @@
+# Failures that remain on master (triaged 2026-10-21 against v0.5.104). Grouped by cause;
+# remove an entry as soon as its test passes.
+
+# Catalogued before the June translator refactor (9532ec80); expected behavior not
+# re-established from current code, needs the maintainer.
+tests/unit/claude-header-forwarding.test.js :: proxyAwareFetch — api.anthropic.com routing routes api.anthropic.com to gotScraping (non-streaming) and returns ok response
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import extracts tokens using exact keys
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import falls back to fuzzy key matching on macOS when exact keys are missing
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import linux uses single hardcoded path and original error message
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import returns descriptive error if macOS db file exists but cannot be opened
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import returns login-prompt error when tokens are missing even after fallback
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import returns not-found when no macOS cursor db paths are accessible
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import unsupported platform returns 400
+tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import unwraps JSON-encoded string values
+tests/unit/openai-to-claude.test.js :: openaiToClaudeResponse omits empty Read pages tool argument before emitting Claude input deltas
+tests/unit/translator-request-normalization.test.js :: request normalization claudeToOpenAIRequest flattens text-only content arrays into string
+tests/unit/translator-request-normalization.test.js :: request normalization filterToOpenAIFormat flattens text-only arrays to string
+tests/unit/translator-request-normalization.test.js :: request normalization parseSSELine supports provider raw NDJSON stream lines
+tests/unit/translator-request-normalization.test.js :: request normalization translateRequest keeps /v1/messages Claude->OpenAI text payloads string-safe
+
+# Real bug: /api/usage/stats serializes raw API keys as byApiKey property names (GHSA-vjc7).
+# Fixed by decolua/9router#4286.
+tests/unit/security-audit.test.js :: AUDIT-002: API key masking byApiKey object keys should use masked key, not raw key
+
+# Stale expectations fixed by decolua/9router#3665 (search auto-switch disabled on purpose;
+# reorder returns a copy).
+tests/unit/combo-autoswitch.test.js :: detectRequiredCapabilities web_search tool -> search
+tests/unit/combo-autoswitch.test.js :: reorderByCapabilities keeps order when no model matches
+
+# Live call: the upstream now answers "Unsupported model mimo-auto", the only model the
+# (hidden since 6d96e24b) mimo-free / mmf providers list.
+tests/unit/mimo-free.live.test.js :: MiMo Free anti-abuse gate (live) chat WITH Chrome User-Agent → 200
+
+# Cannot load in this repo: benchmarks lowdb (removed in bee8dad9) / imports the cloud/ worker,
+# which is not part of this repository.
+tests/unit/db-benchmark.test.js :: <suite failed to load>
+tests/unit/embeddings.cloud.test.js :: <suite failed to load>
+
+# --- v0.5.109 (2026-10-23), all reproduced on a CLEAN upstream/master worktree ---
+# Upstream's own code returns `requestScoped` from checkFallbackError but these five
+# tests still expect the two-field shape. 5 failed / 6 passed on upstream f39d8f07
+# before this fork merged anything.
+tests/unit/codebuddy-block-backoff.test.js :: keeps the same text request-scoped for provider openai
+tests/unit/codebuddy-block-backoff.test.js :: keeps the same text request-scoped for provider codebuddy-cn
+tests/unit/codebuddy-block-backoff.test.js :: keeps the same text request-scoped for provider null
+tests/unit/codebuddy-block-backoff.test.js :: does not classify every 11128 code as a block
+tests/unit/codebuddy-block-backoff.test.js :: still stops a combo on a malformed CodeBuddy request
+
+# Golden header matrix: three providers upstream added/changed without recording the
+# snapshot. Same 7 failures on upstream f39d8f07.
+tests/translator/golden-url-header.test.js :: cline → headers (apiKey / oauth)
+tests/translator/golden-url-header.test.js :: clinepass → headers (apiKey / oauth)
+tests/translator/golden-url-header.test.js :: kimi → headers (apiKey / oauth)
+
+# Four unrelated upstream regressions, identical on upstream f39d8f07.
+tests/unit/cli-connect.test.js :: each tool inherits its OWN server model, falling back to OpenCode's
+tests/unit/combo-credit-fallback.test.js :: routes a 400 response correctly: Bad request
+tests/unit/devin-cli-executor.test.js :: does not set XDG_CONFIG_HOME when DEVIN_MCP_SERVERS is absent
+tests/unit/headroom-responses-format.test.js :: skips Responses tool/reasoning history instead of collapsing it into a message (#2132)

@@ -1,0 +1,60 @@
+# Fly.io deployment for the 9router gateway.
+#
+#   First deploy:  fly apps create 9capnrouter
+#                  fly volumes create capnrouter_data --size 3 --region sin
+#                  fly secrets set JWT_SECRET=... API_KEY_SECRET=... INITIAL_PASSWORD=...
+#                  fly deploy
+#   Redeploy:      fly deploy            (or push to master — see
+#                                        .github/workflows/deploy-fly.yml)
+#
+# The app name and volume name here must match the workflow, which deploys with
+# `--config fly.toml` and therefore inherits both.
+
+app = "9capnrouter"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "20128"
+  HOSTNAME = "0.0.0.0"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # Must equal the [mounts] destination below. If they diverge the SQLite DB is
+  # written to the ephemeral rootfs and every deploy starts from an empty
+  # dashboard — sessions and provider connections included.
+  DATA_DIR = "/app/data"
+
+[http_service]
+  internal_port = 20128
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+  # /api/health is unauthenticated and returns {"ok":true} from a static route,
+  # so it proves the Next server is serving without touching the DB or upstreams.
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    timeout = "10s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  memory = "8192mb"
+  cpu_kind = "performance"
+  cpus = 4
+
+# Array of tables: Fly requires the doubled brackets here. A single [mounts]
+# parses as a plain table and `fly deploy` rejects the config.
+[[mounts]]
+  source = "capnrouter_data"
+  destination = "/app/data"
