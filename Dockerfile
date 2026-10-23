@@ -4,7 +4,7 @@
 # standalone output plus the handful of packages that Next's file tracing cannot
 # see, because they are loaded by path or by a dynamic specifier rather than a
 # static import.
-ARG NODE_IMAGE=node:22.23.4-alpine
+ARG NODE_IMAGE=node:22-alpine
 ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ARG APP_VERSION=unknown
@@ -88,9 +88,7 @@ RUN mkdir -p /app/data && chown -R node:node /app && \
 
 # su-exec drops privileges after chowning the mounted volume: a Fly volume is
 # owned by root on first boot, and the node user must be able to write the DB.
-# Avoid a full distribution upgrade in the runtime image. It makes builds less
-# reproducible and is unrelated to installing the runtime entrypoint helper.
-RUN apk add --no-cache su-exec ffmpeg && \
+RUN apk add --no-cache su-exec && \
   printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
