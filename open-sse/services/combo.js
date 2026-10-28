@@ -575,13 +575,7 @@ export async function handleComboChat({
         try { errorText = JSON.stringify(errorText); } catch { errorText = String(errorText); }
       }
 
-      // Check if should fallback to next model.
-      //
-      // The provider is passed through or a provider-scoped rule in ERROR_RULES
-      // never matches: checkFallbackError skips any rule whose `provider` differs
-      // from its fourth argument, and leaving it unset makes that null. Upstream
-      // reached the same conclusion and reads it with `parseModel`, which also
-      // handles the provider aliases our split-on-slash did not.
+      // Check if should fallback to next model
       const { provider } = parseModel(modelStr);
       const { shouldFallback, cooldownMs, requestScoped } = checkFallbackError(result.status, errorText, 0, provider);
 

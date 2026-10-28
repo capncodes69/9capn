@@ -44,18 +44,8 @@ function sanitize(c) {
 }
 
 function isUsageEligible(connection) {
-  // Mirrors the gate in /api/usage/[connectionId]: an OAuth row, or a static
-  // bearer (apikey / api_key / access_token) on a provider that meters one. The
-  // two lists have to agree — this one decides whether the dashboard *shows* a
-  // quota card, the other whether the card can actually load. When they drift,
-  // the UI advertises a card that answers "Usage not available".
-  const isStaticBearer =
-    connection.authType === "apikey" ||
-    connection.authType === "api_key" ||
-    connection.authType === "access_token";
   return USAGE_SUPPORTED_PROVIDERS.includes(connection.provider) && (
-    connection.authType === "oauth" ||
-    (isStaticBearer && USAGE_APIKEY_PROVIDERS.includes(connection.provider))
+    connection.authType === "oauth" || USAGE_APIKEY_PROVIDERS.includes(connection.provider)
   );
 }
 
