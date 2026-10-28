@@ -844,7 +844,8 @@
     "quirks": {
       "forceAutoToolChoiceModels": [
         "muse-spark-1.3-contributor-free"
-      ]
+      ],
+      "reasoningAliasFields": true
     },
     "format": "openai"
   },
@@ -886,6 +887,11 @@
     "baseUrl": "https://api.siliconflow.com/v1/chat/completions",
     "validateUrl": "https://api.siliconflow.com/v1/models",
     "thinkingFormat": "openai",
+    "format": "openai"
+  },
+  "sensenova": {
+    "baseUrl": "https://token.sensenova.cn/v1/chat/completions",
+    "validateUrl": "https://token.sensenova.cn/v1/models",
     "format": "openai"
   },
   "together": {
@@ -1006,10 +1012,13 @@
     "forceStream": true,
     "thinkingFormat": "openai",
     "headers": {
-      "User-Agent": "IDE/2.108.1 CodeBuddy/2.108.1",
+      "User-Agent": "CodeBuddyIDE/4.12.1 CodeBuddy/1.106.1",
       "X-Product": "SaaS",
-      "X-IDE-Type": "IDE",
-      "X-IDE-Name": "IDE",
+      "X-Product-Version": "1.106.1",
+      "X-IDE-Type": "CodeBuddyIDE",
+      "X-IDE-Name": "CodeBuddyIDE",
+      "X-IDE-Version": "4.12.1",
+      "X-Domain": "www.codebuddy.ai",
       "x-requested-with": "XMLHttpRequest",
       "x-codebuddy-request": "1"
     },
@@ -1272,5 +1281,10 @@
     "baseUrl": "https://internal.chatuncensored.ai",
     "format": "openai",
     "authType": "cookie"
+  },
+  "runcrate": {
+    "baseUrl": "https://api.runcrate.ai/v1/chat/completions",
+    "validateUrl": "https://www.runcrate.ai/api/v1/billing/balance",
+    "format": "openai"
   }
 }
