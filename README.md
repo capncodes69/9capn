@@ -4,12 +4,12 @@ A fork of [decolua/9router](https://github.com/decolua/9router) that fixes the
 CodeBuddy (`cbai/*`) provider and adds production deployment for
 [`9capnrouter`](https://9capnrouter.fly.dev).
 
-**Upstream's README was removed.** It documents 9router, not this fork — every
+**9router's README was removed.** It documents 9router, not this fork — every
 instruction in it (install, provider setup, dashboard tour) describes a tree you are
-not running. What follows is the only thing upstream's README cannot tell you: what
+not running. What follows is the only thing 9router's README cannot tell you: what
 this fork changes, and why.
 
-- Base: upstream `v0.5.111` (`3a978a63`, 2026-10-26)
+- Base: 9router `v0.5.111` (`3a978a63`, 2026-10-26)
 - This tree: `master`, 4 commits on top
 - Scope of the diff: **19 files, +1746 / −22** against `upstream/master`
 
@@ -17,12 +17,12 @@ this fork changes, and why.
 
 ## 1. CodeBuddy (`codebuddy-intl`)
 
-The fork exists for this. Upstream's `codebuddy-intl` is broken against the live
+The fork exists for this. 9router's `codebuddy-intl` is broken against the live
 gateway in three independent ways, and each one was fixed separately.
 
 ### 1.1 What the gateway rejects, and what this fork sends instead
 
-| | Upstream `master` | 9capn `master` |
+| | 9router | 9capn |
 | --- | --- | --- |
 | `X-Conversation-*` family | **not sent** → every chat answers `400 / 11128 "conversation id missing"` | all three sent, plus `X-Request-ID` |
 | `X-Conversation-ID` | — | stable per conversation (SHA-1 → RFC-4122-v5 shape), so retries and later turns keep it |
@@ -45,10 +45,10 @@ The identity values were read out of the shipped 4.12.1 desktop client, not gues
 
 ### 1.2 Failure classification
 
-`11128` and `11140` are different failures with different causes, and upstream
+`11128` and `11140` are different failures with different causes, and 9router
 conflates them.
 
-| Code | Meaning | Upstream behaviour | 9capn behaviour |
+| Code | Meaning | 9router behaviour | 9capn behaviour |
 | --- | --- | --- | --- |
 | `11128` "conversation id missing" | channel verification — not sent from an official client | request-scoped catch-all → `cooldownMs: 0`, re-fires into the refusal forever | `parseError` names the gate; the `X-Conversation-*` family removes the cause |
 | `11128` "first message is not system prompt" | body shape | same catch-all | branched on the **message**, not the code, so it is not mislabelled as a gate |
@@ -61,7 +61,7 @@ Both brands are one gateway with separate Keycloak realms
 (`issuer: https://www.<brand>.ai/auth/realms/copilot`), so a token minted on one is
 rejected by the other.
 
-| | Upstream | 9capn |
+| | 9router | 9capn |
 | --- | --- | --- |
 | `brandHost()` in the OAuth provider | **absent** | present; accepts `codebuddy.ai`, `workbuddy.ai`, with or without `www.` |
 | Device-code host | hardcoded `www.codebuddy.ai` | `options.domain` selects the host; `_brandHost` is echoed back |
@@ -75,7 +75,7 @@ The CodeBuddy CDN answers its A record with `0.0.0.1` for some resolvers. On a
 deployment whose resolver is one of those, every call dies as a 10 s connect timeout
 and the device flow reports `no device code for codebuddy-intl`.
 
-| | Upstream | 9capn |
+| | 9router | 9capn |
 | --- | --- | --- |
 | `open-sse/utils/brandDns.js` | **deleted** | present: resolves brand hosts via `1.1.1.1` / `8.8.8.8`, refuses the blackhole answer, pins the socket to the vetted address |
 | `proxyFetch.js` integration | removed | pins only when no proxy is configured (a proxy resolves DNS on its own side) |
@@ -86,11 +86,11 @@ pin, `66 ms` with it.
 
 ### 1.5 Account dedup
 
-Upstream deleted the CodeBuddy identity block from `connectionsRepo.js` and did not
+9router deleted the CodeBuddy identity block from `connectionsRepo.js` and did not
 move it anywhere. Without it, a re-login of the same account stacks a second row, and
 the newer row shadows the older one on rotation.
 
-| | Upstream | 9capn |
+| | 9router | 9capn |
 | --- | --- | --- |
 | `findCodeBuddyJwt` / `codeBuddyIdentity` / `codeBuddyEmail` | **removed** | present |
 | Identity source | email only, gated on `data.email` | JWT `sub` first, then email — CodeBuddy's device flow returns no profile object, so email alone is not always there |
@@ -99,7 +99,7 @@ the newer row shadows the older one on rotation.
 
 ### 1.6 Account rotation
 
-| | Upstream | 9capn |
+| | 9router | 9capn |
 | --- | --- | --- |
 | Selection order | priority ascending → the front of the pool is drained until it dies | `pickNextConnection()`: least-recently-used first (a never-used account counts as oldest), then lowest consecutive-use count, then priority |
 | Level-15 backoff | still selected | `shouldSkipForBackoff()` keeps it out of rotation entirely |
@@ -111,18 +111,27 @@ accounts were 0–3 hours old and had never been used.
 
 ---
 
-## 2. Deployment
+## 2. Optional: Fly.io deploy config
 
-| | Upstream | 9capn |
+9capn runs like 9router does — `npm run dev`, or any Node host, container or PaaS.
+Nothing below is required. These two files exist only because one particular
+deployment happens to run on Fly.io, and they are inert unless you use them.
+
+| | 9router | 9capn |
 | --- | --- | --- |
-| `fly.toml` | **absent** | present: `app = "9capnrouter"`, `primary_region = "sin"`, internal port `20128` |
-| `.github/workflows/deploy-fly.yml` | **absent** | present: deploys on push to `master` via `flyctl deploy --config fly.toml --remote-only`, gated on `FLY_API_TOKEN` |
+| `fly.toml` | not included | included for those who deploy to Fly: `app = "9capnrouter"`, `primary_region = "sin"`, internal port `20128` |
+| `.github/workflows/deploy-fly.yml` | not included | included for those who deploy to Fly: deploys on push to `master` via `flyctl deploy --config fly.toml --remote-only`, gated on `FLY_API_TOKEN` |
+
+If you are not deploying to Fly, ignore both files and delete them; no code path
+imports them. To deploy elsewhere, use your platform's normal Node build — the only
+contract is the environment variables in `.env.example` and the port in `PORT`
+(default `20128`).
 
 ---
 
 ## 3. Tests
 
-| | Upstream | 9capn |
+| | 9router | 9capn |
 | --- | --- | --- |
 | CodeBuddy test files | 6 | **14** |
 | `codebuddy-intl-identity` | removed | restored (276 lines): JWT claims, `mapTokens`, dedup |
@@ -134,33 +143,33 @@ accounts were 0–3 hours old and had never been used.
 | `codebuddy-intl-request-identity` | — | new: trace family, mirrored ids, user/model headers |
 | `codebuddy-intl-rotation` | — | new: LRU selection, backoff gate |
 | `usage-static-bearer` | removed | restored |
-| `known-fails.txt` | 37 entries | taken from upstream; **not yet regenerated** against this tree |
+| `known-fails.txt` | 37 entries | taken from 9router; **not yet regenerated** against this tree |
 
 Current state: **3706 pass, 29 fail** across `tests/unit/`. None of the 29 are in a
 CodeBuddy suite — the CodeBuddy set is 45/45 green. `codebuddy-block-backoff` fails
 5/11, and it fails **identically on a clean `upstream/master` worktree**, so it is a
-pre-existing upstream failure, not a fork regression.
+pre-existing 9router failure, not a fork regression.
 
 ---
 
 ## 4. Divergence notes
 
 The fork's history was squashed to one commit, so `git merge-base` between this tree
-and upstream returns nothing. Bringing upstream in required
-`--allow-unrelated-histories` and resolving 54 conflicts by policy: upstream wins
+and 9router returns nothing. Bringing 9router in required
+`--allow-unrelated-histories` and resolving 54 conflicts by policy: 9router wins
 everywhere except the CodeBuddy and deployment files listed above.
 
 That merge also dropped three things that had to be restored afterwards —
 `connectionsRepo.js`'s CodeBuddy dedup, the `proxyFetch.js` / `brandDns.js`
-integration, and the rotation helpers. See commit `7fd7c8d1`. If you merge upstream
-again, re-check those three; upstream deletes them on purpose and will keep doing so.
+integration, and the rotation helpers. See commit `7fd7c8d1`. If you merge 9router
+again, re-check those three; it deletes them on purpose and will keep doing so.
 
-Two upstream changes were **not** taken, deliberately:
+Two 9router changes were **not** taken, deliberately:
 
-| Upstream change | Why it is not here |
+| 9router change | Why it is not here |
 | --- | --- |
-| `errorConfig.js` codebuddy rules | upstream already carries both at lines 63-64; our branch had duplicated them at 41-42 as well. Upstream's version is the clean one. |
-| `combo.js` `checkFallbackError` provider argument | upstream already passes `provider`; our branch only added explanatory comments. Nothing functional was lost. |
+| `errorConfig.js` codebuddy rules | 9router already carries both at lines 63-64; our branch had duplicated them at 41-42 as well. 9router's version is the clean one. |
+| `combo.js` `checkFallbackError` provider argument | 9router already passes `provider`; our branch only added explanatory comments. Nothing functional was lost. |
 
 ---
 
@@ -192,7 +201,7 @@ from this fork are still distinguishable from a real IDE by that one header.
 
 ## 6. Running it
 
-Nothing here differs from 9router's own operation, which upstream's README documents
+Nothing here differs from 9router's own operation, which its README documents
 and this file does not repeat. The two commands this fork adds:
 
 ```bash
