@@ -143,27 +143,16 @@ export async function GET(request, { params }) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
-    // Allow OAuth connections, plus whitelisted static-bearer providers
-    // (glm/minimax/kiro/...). Kiro's headless api-key flow persists authType
-    // "api_key" (underscore) while generic apikey providers persist "apikey" —
-    // accept both spellings here.
-    //
-    // "access_token" is the same kind of credential: a raw bearer with no refresh
-    // pair, stored when a user pastes a token instead of running the flow (the
-    // Codex import-token route is the one writer today). Providers that meter an
-    // API key (`features.usageApikey`) meter it identically — the usage handlers
-    // read `c.accessToken || c.apiKey` — so excluding it left those connections
-    // with a quota card that could never load. It is deliberately NOT treated as
-    // OAuth below: there is no refresh token, so the refresh branch must skip it.
+    // Allow OAuth connections, plus whitelisted apikey providers (glm/minimax/kiro/...)
+    // Kiro's headless api-key flow persists authType "api_key" (underscore) while
+    // generic apikey providers persist "apikey" — accept both spellings here.
     const isOAuth = connection.authType === "oauth";
-    const isStaticBearerAuth =
-      connection.authType === "apikey" ||
-      connection.authType === "api_key" ||
-      connection.authType === "access_token";
-    const isStaticBearerEligible =
-      isStaticBearerAuth && USAGE_APIKEY_PROVIDERS.includes(connection.provider);
+    const isApikeyAuth =
+      connection.authType === "apikey" || connection.authType === "api_key";
+    const isApikeyEligible =
+      isApikeyAuth && USAGE_APIKEY_PROVIDERS.includes(connection.provider);
 
-    if (!isOAuth && !isStaticBearerEligible) {
+    if (!isOAuth && !isApikeyEligible) {
       return Response.json({ message: "Usage not available for this connection" });
     }
 
