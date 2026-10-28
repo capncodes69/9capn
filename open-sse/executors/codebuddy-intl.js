@@ -49,6 +49,17 @@ function uuidV7() {
   ].join("-");
 }
 
+// 32 lowercase hex chars — the shape the client uses for trace and request ids
+// (it strips the dashes from a UUID before sending).
+function hex32() {
+  return randomUUID().replace(/-/g, "");
+}
+
+// 16 hex chars, the B3 span-id width.
+function hex16() {
+  return randomUUID().replace(/-/g, "").slice(0, 16);
+}
+
 // www.workbuddy.ai is the same gateway under its second brand host.
 function isWorkBuddyHost(url) {
   try {
@@ -109,9 +120,8 @@ function writeHeader(headers, name, value) {
  *
  * Only the intl executor grows these headers — codebuddy-cn is not gated.
  */
-function withConversationHeaders(headers, url, body = null) {
+function withConversationHeaders(headers, url, body = null, { model = "", credentials = null } = {}) {
   const workbuddy = isWorkBuddyHost(url);
-  const freshCallId = () => (workbuddy ? uuidV7().replace(/-/g, "") : randomUUID());
 
   const sessionKey =
     (typeof body?.session_id === "string" && body.session_id) ||
@@ -138,20 +148,39 @@ function withConversationHeaders(headers, url, body = null) {
         ? uuidV7()
         : randomUUID());
   }
+
+  // The client assigns ONE requestId to both X-Request-ID and
+  // X-Conversation-Request-ID. Sending two different values is a shape no real client
+  // produces, so mirror them here; a caller-supplied X-Request-ID wins.
+  const requestId = readHeader(headers, "X-Request-ID") || hex32();
+  writeHeader(headers, "X-Request-ID", requestId);
   if (!readHeader(headers, "X-Conversation-Request-ID")) {
-    writeHeader(headers, "X-Conversation-Request-ID", freshCallId());
+    writeHeader(headers, "X-Conversation-Request-ID", requestId);
   }
-  // The request id mirrors the message id: reuse whichever side already exists.
-  const messageId =
-    readHeader(headers, "X-Conversation-Message-ID") ||
-    readHeader(headers, "X-Request-ID") ||
-    freshCallId();
+
+  // Fresh per request, and a dashed UUID — the client uses crypto.randomUUID() here.
   if (!readHeader(headers, "X-Conversation-Message-ID")) {
-    writeHeader(headers, "X-Conversation-Message-ID", messageId);
+    writeHeader(headers, "X-Conversation-Message-ID", randomUUID());
   }
-  if (!readHeader(headers, "X-Request-ID")) {
-    writeHeader(headers, "X-Request-ID", messageId);
-  }
+
+  // W3C/B3 trace family. The client sends all of it; a request carrying none of it is
+  // another shape no real IDE produces.
+  const traceId = readHeader(headers, "X-Trace-ID") || readHeader(headers, "X-B3-TraceId") || hex32();
+  writeHeader(headers, "X-Trace-ID", traceId);
+  writeHeader(headers, "X-B3-TraceId", traceId);
+  if (!readHeader(headers, "X-B3-ParentSpanId")) writeHeader(headers, "X-B3-ParentSpanId", hex32());
+  if (!readHeader(headers, "X-B3-SpanId")) writeHeader(headers, "X-B3-SpanId", hex16());
+  writeHeader(headers, "X-B3-Sampled", "1");
+  writeHeader(
+    headers,
+    "b3",
+    `${traceId}-${readHeader(headers, "X-B3-SpanId")}-1-${readHeader(headers, "X-B3-ParentSpanId")}`,
+  );
+
+  // Identity headers the client sends that we can derive from what we have.
+  const userId = credentials?.providerSpecificData?.userId;
+  if (userId && !readHeader(headers, "X-User-Id")) writeHeader(headers, "X-User-Id", String(userId));
+  if (model && !readHeader(headers, "X-Model-ID")) writeHeader(headers, "X-Model-ID", String(model));
 
   return headers;
 }
@@ -173,7 +202,7 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
   buildHeaders(credentials, stream = true, url, model, body = null) {
     const headers = super.buildHeaders(credentials, stream, url, model, body);
     try {
-      return withConversationHeaders(headers, url, body);
+      return withConversationHeaders(headers, url, body, { model, credentials });
     } catch (error) {
       throw new Error(
         `CodeBuddy channel verification: could not attach the X-Conversation-* family `

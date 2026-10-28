@@ -27,8 +27,12 @@ describe("conversation header family", () => {
     for (const name of [CONV_ID, CONV_REQ, CONV_MSG, REQ_ID]) {
       expect(out[name], `${name} missing`).toBeTruthy();
     }
-    // The request id mirrors the message id, as the official client sends it.
-    expect(out[REQ_ID]).toBe(out[CONV_MSG]);
+    // X-Conversation-Request-ID mirrors X-Request-ID: the official client assigns the
+    // same ir.requestId to both. X-Conversation-Message-ID is a separate fresh UUID.
+    // (This assertion used to require REQ_ID === CONV_MSG; the client bundle shows
+    // that is wrong — see extensions/genie/out/extension/index.js in the 4.12.1 build.)
+    expect(out[CONV_REQ]).toBe(out[REQ_ID]);
+    expect(out[CONV_MSG]).not.toBe(out[REQ_ID]);
   });
 
   it("keeps the conversation id stable across turns of one conversation", () => {
@@ -54,10 +58,14 @@ describe("conversation header family", () => {
     expect(a[CONV_ID]).not.toBe(b[CONV_ID]);
   });
 
-  it("uses hyphen-less v7 ids on the workbuddy brand host", () => {
+  it("uses hyphen-less 32-hex ids for the per-call ids", () => {
+    // Both brand hosts take 32-hex ids for the request/message family; the dashed
+    // UUID shape is only used for X-Conversation-ID and X-Conversation-Message-ID,
+    // matching the client's generateUUUID() vs its hex request ids.
     const out = headers(userTurn("hi"), { url: URL_WB });
     expect(out[CONV_REQ]).not.toContain("-");
-    expect(out[CONV_MSG]).not.toContain("-");
+    expect(out[REQ_ID]).not.toContain("-");
+    expect(out[CONV_REQ]).toMatch(/^[0-9a-f]{32}$/);
   });
 });
 
