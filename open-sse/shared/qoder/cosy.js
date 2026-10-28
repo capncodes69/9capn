@@ -195,5 +195,7 @@ export function buildCosyHeaders(body, requestUrl, creds) {
     "Cosy-Organization-Tags": "",
     "Login-Version": QODER_LOGIN_VERSION,
     "X-Request-Id": uuidv4(),
+    // The shipped client sends its IDE version here as well as in Cosy-Version.
+    "X-Version": QODER_IDE_VERSION,
   };
 }

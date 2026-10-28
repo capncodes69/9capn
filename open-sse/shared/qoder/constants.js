@@ -139,11 +139,18 @@ export function qoderInferenceBase(credentials, region = QODER_REGION_INTL) {
 
 // COSY header constants. These are not arbitrary — the upstream signature
 // validation matches them against the values used at signing time.
-export const QODER_IDE_VERSION = "1.0.0";
+//
+// Values mirror the shipped Qoder IDE 1.37.0. Source of each:
+//   IDE version     qoder-ide_amd64.deb -> resources/app/package.json "version"
+//   machine os      Go agent string table: "machine-info" "x86_64_linux" "machine_info"
+//   client/machine  accepted as-is by the gateway (unchanged from upstream)
+// Do not guess these. A version no client ever sent is worse than a stale one:
+// the risk engine scores implausible identities, not old ones.
+export const QODER_IDE_VERSION = "1.37.0";
 export const QODER_CLIENT_TYPE = "5";
 export const QODER_DATA_POLICY = "disagree";
 export const QODER_LOGIN_VERSION = "v2";
-export const QODER_MACHINE_OS = "x86_64_windows";
+export const QODER_MACHINE_OS = "x86_64_linux";
 export const QODER_MACHINE_TYPE = "5";
 
 // Canonical model identifiers. Identity map — keep as a map so callers can

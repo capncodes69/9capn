@@ -222,3 +222,27 @@ export function parseQoderQueueStatus(input) {
     waitTime: toNumber(root.waitTime),
   };
 }
+
+/**
+ * Did the queue move between two polls?
+ *
+ * A `p3` account warms up by being used: the queue drains, then the account is
+ * served on the fast path. Measured on a fresh account, that took ~6 attempts.
+ * A fixed wall-clock budget cannot express this — too short and the account never
+ * warms, too long and a genuinely stuck request blocks the gateway for minutes.
+ *
+ * So the caller keeps waiting while *something* changes and gives up only when
+ * two consecutive polls are identical.
+ */
+export function isQueueProgressing(prev, next) {
+  if (!prev || !next) return true;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const prevCount = num(prev.queueCount);
+  const nextCount = num(next.queueCount);
+  if (prevCount !== null && nextCount !== null && nextCount < prevCount) return true;
+  const prevWait = num(prev.waitTime);
+  const nextWait = num(next.waitTime);
+  if (prevWait !== null && nextWait !== null && nextWait < prevWait) return true;
+  if (prev.queueType !== next.queueType) return true;
+  return false;
+}

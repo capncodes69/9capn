@@ -25,7 +25,7 @@
 import { createHash } from "crypto";
 
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
-import { buildCosyHeaders } from "../shared/qoder/cosy.js";
+import { buildCosyHeaders, deriveMachineId } from "../shared/qoder/cosy.js";
 import {
   QODER_IDE_VERSION,
   QODER_CLIENT_TYPE,
@@ -156,19 +156,54 @@ export async function resolveQoderCredentials(credentials, proxyOptions = null, 
   if (isQoderPat(raw)) {
     const effRegion = region || qoderRegionOf(credentials?.provider);
     const resolved = await resolvePatCredential(raw, proxyOptions, signal, effRegion);
-    return {
+    const psd = {
+      authMethod: "pat",
+      ...(credentials?.providerSpecificData || {}),
+      userId: resolved.userId || credentials?.providerSpecificData?.userId || "",
+      machineId:
+        credentials?.providerSpecificData?.machineId ||
+        deriveMachineId(resolved.userId || credentials?.providerSpecificData?.userId),
+    };
+    const next = {
       ...credentials,
       accessToken: resolved.accessToken,
-      apiKey: undefined,
-      providerSpecificData: {
-        authMethod: "pat",
-        ...(credentials?.providerSpecificData || {}),
-        userId: resolved.userId || credentials?.providerSpecificData?.userId || "",
-        machineId: credentials?.providerSpecificData?.machineId || "",
-      },
+      providerSpecificData: psd,
     };
+    await persistResolvedQoderIdentity(next, psd);
+    return next;
   }
   return credentials;
+}
+
+/**
+ * Write the resolved identity back to the connection record.
+ *
+ * PAT connections are stored with an empty `providerSpecificData`, so without
+ * this every request re-runs `jobToken/exchange` + `userinfo` (two extra
+ * round-trips) and, worse, derives `machineId` from scratch each time. The
+ * queue is keyed on that id: an unstable one makes each request look like a new
+ * device, and a new device rejoins the back of the queue.
+ *
+ * Fail-open by design — a persist failure must never fail the request.
+ */
+export async function persistResolvedQoderIdentity(credentials, psd) {
+  const connectionId = credentials?.connectionId;
+  if (!connectionId) return;
+  const stored = credentials?.providerSpecificData || {};
+  const userId = psd?.userId || "";
+  const machineId = psd?.machineId || "";
+  if (!userId && !machineId) return;
+  if (stored.userId === userId && stored.machineId === machineId) return;
+  try {
+    const { updateProviderConnection } = await import(
+      "../../src/lib/db/repos/connectionsRepo.js"
+    );
+    await updateProviderConnection(connectionId, {
+      providerSpecificData: { ...stored, userId, machineId },
+    });
+  } catch {
+    // Never let identity bookkeeping break a chat request.
+  }
 }
 
 /**
