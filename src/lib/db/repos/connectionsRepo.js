@@ -412,3 +412,41 @@ export async function cleanupProviderConnections() {
   });
   return cleaned;
 }
+
+// ── Account rotation policy ────────────────────────────────────────────────
+//
+// The default selection orders by priority ascending, so a pool is drained from the
+// front: the lowest-priority accounts are used until they die while the rest sit idle.
+// Measured on a 310-account CodeBuddy pool, that is exactly what happened — the three
+// accounts the gateway restricted (11140) had 6/13/14 model locks and were 56-62 days
+// old, while the only healthy accounts were 0-3 hours old and had never been used.
+const MAX_BACKOFF_LEVEL = 15;
+
+/** True when a connection must not be selected at all. */
+export function shouldSkipForBackoff(connection) {
+  if (!connection) return true;
+  if (connection.isActive === false) return true;
+  return Number(connection.backoffLevel || 0) >= MAX_BACKOFF_LEVEL;
+}
+
+/**
+ * Pick the next connection to try: the least-recently-used eligible one, tie-broken by
+ * consecutive-use count and then priority. Returns null when nothing is eligible, so the
+ * caller can report exhaustion instead of re-firing at a blocked account.
+ *
+ * A never-used connection counts as the oldest (timestamp 0), which is what makes a fresh
+ * account get used before one that has already been hammered.
+ */
+export function pickNextConnection(connections = []) {
+  const eligible = (connections || []).filter((c) => !shouldSkipForBackoff(c));
+  if (!eligible.length) return null;
+  return eligible.slice().sort((a, b) => {
+    const aUsed = a.lastUsedAt ? new Date(a.lastUsedAt).getTime() : 0;
+    const bUsed = b.lastUsedAt ? new Date(b.lastUsedAt).getTime() : 0;
+    if (aUsed !== bUsed) return aUsed - bUsed;
+    const aCount = Number(a.consecutiveUseCount || 0);
+    const bCount = Number(b.consecutiveUseCount || 0);
+    if (aCount !== bCount) return aCount - bCount;
+    return (a.priority || 999) - (b.priority || 999);
+  })[0];
+}
