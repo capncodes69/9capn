@@ -182,7 +182,11 @@ export function buildCosyHeaders(body, requestUrl, creds) {
     "Cosy-Date": timestamp,
     "Cosy-Version": QODER_IDE_VERSION,
     "Cosy-Machineid": machineId,
-    "Cosy-Machinetoken": machineId,
+    // Cosy-Machinetoken is NOT the machine id. The shipped client keeps it in
+    // its own machine_token.json, produced by cosy/service/umid.GetMachineTokenAndType
+    // from the device hardware id / MAC address. We cannot reproduce that, and a
+    // token that does not match the id it claims to belong to is a stronger
+    // "not a real client" signal than an absent header — so it is omitted.
     "Cosy-Machinetype": QODER_MACHINE_TYPE,
     "Cosy-Machineos": QODER_MACHINE_OS,
     "Cosy-Clienttype": QODER_CLIENT_TYPE,

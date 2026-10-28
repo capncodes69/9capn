@@ -180,16 +180,25 @@ describe("routableQoderModels", () => {
         ["dmodel", { key: "dmodel", enable: false }],
       ]),
     };
-    // Sonus (smodel) / Cantus (cmodel) are absent from the catalog but the
-    // executor still routes them via QODER_STATIC_MODEL_CONFIGS, so they lead
-    // the list instead of vanishing from /v1/models.
-    expect(routableQoderModels(catalog)).toEqual([
-      { id: "smodel", name: "Sonus", hidden: false },
-      { id: "cmodel", name: "Cantus", hidden: false },
-      { id: "qmodel_38max", name: "Qwen3.8-Max", hidden: false },
-      { id: "qfmodel", name: "Qwen Fast", hidden: true },
-      { id: "dmodel", name: "dmodel", hidden: true },
-    ]);
+    // Every registry model now has a static block, so a catalog entry for the
+    // same key wins and the remaining static-only keys lead the list. Assert the
+    // ordering rule, not an exact array: the static set grows as models are added.
+    const out = routableQoderModels(catalog);
+    const ids = out.map((m) => m.id);
+
+    // Catalog-visible and hidden entries keep their relative order at the end.
+    expect(ids.slice(-3)).toEqual(["qmodel_38max", "qfmodel", "dmodel"]);
+
+    // Static-only keys come first and never duplicate a catalog key.
+    const staticOnly = ids.slice(0, -3);
+    expect(staticOnly).toContain("smodel");
+    expect(staticOnly).toContain("cmodel");
+    expect(staticOnly).not.toContain("qmodel_38max");
+    expect(new Set(ids).size).toBe(ids.length);
+
+    // Sonus/Cantus keep their real display names.
+    expect(out.find((m) => m.id === "smodel").name).toBe("Sonus");
+    expect(out.find((m) => m.id === "cmodel").name).toBe("Cantus");
   });
 
   it("lets a catalog entry win over the static block for the same key", () => {

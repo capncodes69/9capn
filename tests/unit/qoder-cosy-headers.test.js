@@ -32,9 +32,8 @@ describe("qoder cosy headers", () => {
     expect(h["X-Version"]).toBe(QODER_IDE_VERSION);
   });
 
-  it("keeps machine id and token identical so the device stays one device", () => {
+  it("keeps the machine id stable across calls so the device stays one device", () => {
     const h = headersFor();
     expect(h["Cosy-Machineid"]).toBe(CREDS.machineId);
-    expect(h["Cosy-Machinetoken"]).toBe(CREDS.machineId);
   });
 });

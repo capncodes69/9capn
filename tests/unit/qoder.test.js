@@ -170,7 +170,6 @@ describe("buildCosyHeaders", () => {
       "Cosy-Date",
       "Cosy-Version",
       "Cosy-Machineid",
-      "Cosy-Machinetoken",
       "Cosy-Machinetype",
       "Cosy-Machineos",
       "Cosy-Clienttype",
@@ -218,10 +217,13 @@ describe("buildCosyHeaders", () => {
     expect(headers["Cosy-Bodylength"]).toBe("0");
   });
 
-  it("Cosy-Machineid + Cosy-Machinetoken match the supplied machineId", () => {
+  it("Cosy-Machineid is the supplied machineId, and no fabricated machine token", () => {
     const headers = buildCosyHeaders(Buffer.alloc(0), QODER_MODEL_LIST_URL, creds);
     expect(headers["Cosy-Machineid"]).toBe("fixed-machine-id");
-    expect(headers["Cosy-Machinetoken"]).toBe("fixed-machine-id");
+    // The shipped client's machine token lives in its own machine_token.json and
+    // is derived from the device hardware id, so it is not the machine id. We
+    // omit it rather than echo the id back.
+    expect(headers["Cosy-Machinetoken"]).toBeUndefined();
   });
 
   it("auto-generates a machineId when none is supplied", () => {

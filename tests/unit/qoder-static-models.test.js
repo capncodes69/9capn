@@ -18,8 +18,17 @@ import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.j
 import qoderRegistry from "../../open-sse/providers/registry/qoder.js";
 
 describe("Qoder static model configs", () => {
-  it("defines both frontier keys", () => {
-    expect(Object.keys(QODER_STATIC_MODEL_CONFIGS).sort()).toEqual(["cmodel", "smodel"]);
+  it("defines a static block for every registry model, not just the frontier pair", () => {
+    // Was ["cmodel","smodel"] only. A per-account /model/list omits models the
+    // account is entitled to, and production hit exactly that with
+    // qmodel_latest: 400 "model_config not yet known" in 205ms. Every model the
+    // registry advertises now has a static fallback; a live catalog entry still
+    // wins over it.
+    const keys = Object.keys(QODER_STATIC_MODEL_CONFIGS).sort();
+    expect(keys).toContain("cmodel");
+    expect(keys).toContain("smodel");
+    expect(keys).toContain("qmodel_latest");
+    expect(keys.length).toBeGreaterThanOrEqual(18);
   });
 
   it("maps the canonical keys into QODER_MODEL_MAP", () => {
@@ -46,11 +55,11 @@ describe("Qoder static model configs", () => {
     expect(getQoderStaticModelConfig("cmodel").key).toBe("cmodel");
   });
 
-  it("returns null for a key with no static block", () => {
-    // Genuinely unknown keys must still fail loudly rather than get a
-    // fabricated config that upstream would silently ignore.
-    expect(getQoderStaticModelConfig("dmodel")).toBeNull();
+  it("returns null for a genuinely unknown key", () => {
+    // Registry models now have static blocks (see the coverage test), so the
+    // "fails loudly" guarantee applies only to keys no client could send.
     expect(getQoderStaticModelConfig("not-a-model")).toBeNull();
+    expect(getQoderStaticModelConfig("")).toBeNull();
   });
 });
 
