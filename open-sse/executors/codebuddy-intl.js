@@ -100,6 +100,36 @@ function writeHeader(headers, name, value) {
   headers[key || name] = value;
 }
 
+// Drop the values the registry's `codebuddyHeaders` hook (default.js) just wrote.
+// Upstream v0.5.112 wires that hook for both CodeBuddy gateways and it runs inside
+// super.buildHeaders(), i.e. BEFORE this executor's derivation. Its ids are random
+// dashed UUIDs, which is the wrong shape here twice over: the conversation id must
+// stay stable across the turns of one conversation (the gateway keys channel
+// verification on it) and the per-call ids are hyphen-less 32-hex on the live
+// hosts. Keeping the hook's values would satisfy "some id is present" while
+// breaking the stability the gateway actually checks, so strip and re-derive.
+// CN has no derivation of its own and keeps the hook as-is.
+const HOOK_MANAGED_HEADERS = [
+  "X-Request-ID",
+  "X-Conversation-ID",
+  "X-Conversation-Request-ID",
+  "X-Conversation-Message-ID",
+];
+
+function stripHookIds(headers) {
+  for (const name of HOOK_MANAGED_HEADERS) {
+    if (typeof headers?.delete === "function") {
+      headers.delete(name);
+      continue;
+    }
+    if (!headers || typeof headers !== "object") continue;
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === name.toLowerCase()) delete headers[key];
+    }
+  }
+  return headers;
+}
+
 /**
  * Attach the conversation-correlation family the gateway's channel verification
  * demands (HTTP 400 code 11128 "conversation id missing" without it). Values that
@@ -202,7 +232,7 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
   buildHeaders(credentials, stream = true, url, model, body = null) {
     const headers = super.buildHeaders(credentials, stream, url, model, body);
     try {
-      return withConversationHeaders(headers, url, body, { model, credentials });
+      return withConversationHeaders(stripHookIds(headers), url, body, { model, credentials });
     } catch (error) {
       throw new Error(
         `CodeBuddy channel verification: could not attach the X-Conversation-* family `

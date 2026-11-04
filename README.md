@@ -4,20 +4,23 @@ Fork of [decolua/9router](https://github.com/decolua/9router) that fixes the Cod
 (`cbai/*`) provider. 9router's own README was removed — it documents a tree you are not
 running. This file covers only what the fork changes.
 
-Base: 9router `v0.5.111` (`3a978a63`) · 9 commits on top · code diff **19 files, +1746 / −22**
+Base: 9router `v0.5.112` (`1fe586bb`) · 12 commits on top · code diff **20 files, +1776 / −22**
 
 ---
 
 ## CodeBuddy: request headers
 
-9router sends 6 headers and no conversation ids, so every chat answers
-`400 / 11128 "conversation id missing"`.
+9router ≤ v0.5.111 sent 6 headers and no conversation ids, so every chat answered
+`400 / 11128 "conversation id missing"`. v0.5.112 adds a `codebuddyHeaders` hook that emits
+the four ids, but as random dashed UUIDs — the conversation id is not stable across the
+turns of one conversation and the per-call ids are not the hyphen-less 32-hex the live hosts
+take. The fork's `CodeBuddyIntlExecutor` strips the hook's values and re-derives them.
 
-| | 9router | 9capn |
+| | 9router v0.5.112 | 9capn |
 | --- | --- | --- |
-| `X-Conversation-ID` | not sent | stable per conversation (SHA-1 → RFC-4122-v5) |
-| `X-Conversation-Request-ID` | not sent | fresh 32-hex, **mirrored into `X-Request-ID`** as the client does |
-| `X-Conversation-Message-ID` | not sent | fresh dashed UUID per request |
+| `X-Conversation-ID` | random dashed UUID per request | stable per conversation (SHA-1 → RFC-4122-v5) |
+| `X-Conversation-Request-ID` | random dashed UUID | fresh 32-hex, **mirrored into `X-Request-ID`** as the client does |
+| `X-Conversation-Message-ID` | random dashed UUID | fresh dashed UUID per request |
 | `User-Agent` | `IDE/2.108.1 CodeBuddy/2.108.1` | `CodeBuddyIDE/4.12.1 CodeBuddy/1.106.1` |
 | `X-IDE-Type` / `X-IDE-Name` | `IDE` | `CodeBuddyIDE` |
 | `X-IDE-Version` / `X-Product-Version` | not sent | `4.12.1` / `1.106.1` |
@@ -94,20 +97,24 @@ locks and were 56–62 days old; the only healthy ones were 0–3 hours old, nev
 | `-identity`, `-conversation-headers`, `-brand-dns`, `-waf-backoff`, `-live`, `usage-static-bearer` | removed | restored |
 | `-official-identity`, `-request-identity`, `-rotation` | — | new |
 
-`tests/unit/`: **3706 pass, 29 fail**. CodeBuddy suites are **45/45 green**.
-`codebuddy-block-backoff` fails 5/11 — identically on a clean 9router worktree, so it is
-pre-existing, not a fork regression. `known-fails.txt` is still 9router's and has not
-been regenerated against this tree.
+`tests/unit/`: **3836 pass, 24 fail**. CodeBuddy suites are **92/92 green**.
+The 24 red are pre-existing on a clean 9router `v0.5.112` worktree too — they are not fork
+regressions. `known-fails.txt` is still 9router's and has not been regenerated against this
+tree, so `verify-no-regression.mjs` will report them as "new"; diff against a HEAD worktree
+instead.
 
 ---
 
 ## Notes
 
-**Merging 9router again.** The fork's history was squashed, so `git merge-base` returns
-nothing; bringing upstream in needs `--allow-unrelated-histories`. Policy: 9router wins
-everywhere except the files above. The last merge silently dropped three things that had
-to be restored — the dedup block, the `proxyFetch`/`brandDns` integration, and the
-rotation helpers. Re-check those three every time.
+**Merging 9router again.** `git merge v0.5.x` works directly now — the history was
+reconnected by the v0.5.111 merge, so `merge-base` resolves and no
+`--allow-unrelated-histories` is needed. Policy: 9router wins everywhere except the files
+above. Three things the v0.5.111 merge silently dropped and had to be restored — the dedup
+block, the `proxyFetch`/`brandDns` integration, and the rotation helpers.
+The v0.5.112 merge added a fourth: its `codebuddyHeaders` hook collides with this fork's
+derivation, so `CodeBuddyIntlExecutor.buildHeaders` now strips the hook's ids first.
+Re-check all four every time.
 
 **Updating the client identity.** No endpoint returns the current version — `/v2/config`,
 `/v2/update`, `latest.yml`, `/v2/plugin/version` are 404 and the plugin VSIX is 403. Read
