@@ -246,13 +246,13 @@ export const QODER_STATIC_MODEL_CONFIGS = Object.freeze({
   qmodel_latest: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "qmodel_latest", display_name: "Qwen3.7-Max", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
   qmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "qmodel", display_name: "Qwen3.7-Plus", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
   qfmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "qfmodel", display_name: "Qwen3.8-Flash", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
-  kmodel_latest: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "kmodel_latest", display_name: "Kimi-K3", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
-  kmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "kmodel", display_name: "Kimi-K2.7-Code", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
+  kmodel_latest: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "kmodel_latest", display_name: "Kimi-K3.1-Pro", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
+  kmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "kmodel", display_name: "Kimi-K2.8-Preview", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
   gmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "gmodel", display_name: "GLM-5.3", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
   gfmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "gfmodel", display_name: "GLM-5.3-Flash", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
   dmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "dmodel", display_name: "DeepSeek-V4-Pro", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
-  dfmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "dfmodel", display_name: "DeepSeek-V4-Flash", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
-  mmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "mmodel", display_name: "MiniMax-M3", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
+  dfmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "dfmodel", display_name: "DeepSeek-Flash", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
+  mmodel: Object.freeze({ ...QODER_STATIC_MODEL_CONFIG_BASE, key: "mmodel", display_name: "MiniMax-M3.1-Flash", is_vl: false, is_reasoning: false, max_input_tokens: 180000 }),
 });
 
 /**
