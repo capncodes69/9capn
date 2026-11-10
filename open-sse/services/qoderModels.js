@@ -265,8 +265,10 @@ export async function resolveQoderCredentials(credentials, proxyOptions = null, 
       accessToken: resolved.accessToken,
       // The PAT is a year-long secret; the job token is a 24h derivative.
       // Dropping apiKey keeps the long-lived secret out of logs and out of any
-      // consumer that reads apiKey and skips accessToken.
-      apiKey: "",
+      // consumer that reads apiKey and skips accessToken. `undefined` (not "")
+      // so JSON.stringify omits the field entirely instead of shipping an empty
+      // string that still reads as "an apiKey is present".
+      apiKey: undefined,
       providerSpecificData: psd,
     };
     await persistResolvedQoderIdentity(next, psd);
