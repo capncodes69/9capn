@@ -17,6 +17,11 @@ const UPSTREAM_LABELS = {
   gmodel: "GLM-5.3",
   gfmodel: "GLM-5.3-Flash",
   qmodel_38max: "Qwen3.8-Max",
+  // Slot keys Qoder recycles — live labels captured from ide-text v1.0.357
+  // (2026-11-11): qmodel_latest = Qwen4-Max-Preview (enable:false, usable),
+  // qmodel_preview = Qwen3.8-Max-Preview. See registry/qoder.js.
+  qmodel_latest: "Qwen4-Max-Preview",
+  qmodel_preview: "Qwen3.8-Max-Preview",
   qfmodel: "Qwen3.8-Flash",
   smodel: "Sonus",
   cmodel: "Cantus",
