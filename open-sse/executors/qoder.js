@@ -287,9 +287,6 @@ async function resolveQoderModelConfig({ qoderKey, credentials, log, proxyOption
 }
 
 async function buildQoderRequestBody({ model, body, credentials, log, proxyOptions, signal, uploadFn = null, region = "intl", modelConfig: preResolvedConfig = null }) {
-  // Accepts both the canonical slot key (qmodel_latest) and the display name
-  // ("Qwen4-Max-Preview") — slot keys are recycled aliases, so the display
-  // name is the stable way for a client to ask for a specific model.
   const qoderKey = resolveQoderModelKey(model);
 
   // The catalog entry carries the wire config the request must echo (window,
@@ -463,16 +460,30 @@ function isLoginExpiredFrame(inner, statusVal) {
 }
 
 /**
- * Enrich a billing-block error message with the account's live quota and the
- * next daily-reset boundary. Upstream's `110` body carries no timestamp (the
- * quota API's `expiresAt` is the *subscription* expiry, not the daily reset),
- * so the reset time is computed: Qoder's billing day rolls at midnight UTC.
- * Best-effort with a short timeout — a quota-fetch failure must never delay
- * or fail the error response itself.
+ * Billing-block message enrichment.
+ *
+ * Upstream's `110` body carries no timestamp and the quota API exposes plan
+ * credits only — NOT the daily request count that `110` actually means. So the
+ * message must not imply credits caused the block; they are plan context. The
+ * reset line is an ESTIMATE (next midnight UTC, the only boundary observed so
+ * far) and is labelled as such.
+ *
+ * The quota read is cached for QUOTA_CACHE_TTL_MS: a billing block usually
+ * repeats for every request in the window, and re-fetching per request only
+ * adds latency to an already-failing path.
  */
-async function describeQoderDailyQuota(inner, credentials, region, log) {
-  const base = inner && typeof inner === "string" ? inner : "qoder billing block";
-  let quotaText = "";
+const QUOTA_CACHE_TTL_MS = 60 * 1000;
+const quotaCache = new Map();
+
+async function fetchQoderQuota(credentials, region, log) {
+  const psd = credentials?.providerSpecificData || {};
+  const key = psd.userId || credentials?.connectionId || credentials?.accessToken || "anon";
+  const cached = quotaCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.body;
+
+  const token = credentials?.accessToken;
+  if (!token) return null;
+
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort("timeout"), 4000);
@@ -480,7 +491,18 @@ async function describeQoderDailyQuota(inner, credentials, region, log) {
     try {
       const res = await proxyAwareFetch(
         qoderQuotaUsageUrl(region || "intl"),
-        { method: "GET", headers: { Accept: "application/json", "User-Agent": "qodercli/1.0.0" }, signal: controller.signal },
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "qodercli/1.0.0",
+            // The quota endpoint is authenticated like every other openApi
+            // call: without the job/device token it answers 401 and the whole
+            // enrichment silently degrades to the bare upstream message.
+            Authorization: `Bearer ${token}`,
+          },
+          signal: controller.signal,
+        },
         null,
       );
       if (res.ok) body = await res.json().catch(() => null);
@@ -488,30 +510,41 @@ async function describeQoderDailyQuota(inner, credentials, region, log) {
       clearTimeout(timer);
     }
     if (body) {
-      const uq = body.userQuota || {};
-      const ao = body.addOnQuota || {};
-      const parts = [];
-      if (typeof uq.used === "number" || typeof uq.total === "number") {
-        parts.push(`plan credits ${uq.used ?? "?"}/${uq.total ?? "?"}`);
+      quotaCache.set(key, { body, expiresAt: Date.now() + QUOTA_CACHE_TTL_MS });
+      if (quotaCache.size > 100) {
+        const oldest = quotaCache.keys().next().value;
+        quotaCache.delete(oldest);
       }
-      if (typeof ao.used === "number" && (ao.total || 0) > 0 && ao.used > 0) {
-        parts.push(`add-on ${ao.used}/${ao.total}`);
-      }
-      if (body.userType) parts.push(`plan: ${body.userType}`);
-      quotaText = parts.join(", ");
     }
+    return body;
   } catch (e) {
     log?.debug?.("QODER", `quota fetch for error message failed: ${e?.message || e}`);
+    return null;
   }
+}
 
-  // Next midnight UTC — Qoder's daily billing window boundary.
+async function describeQoderDailyQuota(inner, credentials, region, log) {
+  const base = inner && typeof inner === "string" ? inner : "qoder billing block";
+  const body = await fetchQoderQuota(credentials, region, log);
+
+  const parts = [];
+  if (body) {
+    const uq = body.userQuota || {};
+    if (typeof uq.used === "number" && typeof uq.total === "number") {
+      parts.push(`${uq.used}/${uq.total} plan credits used`);
+    }
+    if (body.userType) parts.push(`plan ${body.userType}`);
+  }
+  const planClause = parts.length > 0 ? ` (${parts.join(", ")}; credits are not the limit here)` : "";
+
+  // Next midnight UTC — the only daily boundary observed so far. Explicitly an
+  // estimate: the real window may roll sooner (observed recovery inside ~1h).
   const now = new Date();
   const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
   const mins = Math.max(1, Math.round((reset.getTime() - now.getTime()) / 60000));
-  const resetText = `resets in ~${mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`} (${reset.toISOString().replace("T", " ").slice(0, 16)} UTC)`;
+  const span = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
 
-  const quotaClause = quotaText ? ` — ${quotaText}` : "";
-  return `${base}${quotaClause}; ${resetText}`;
+  return `${base}${planClause}; daily request window resets by ~${span} at the latest (est., ${reset.toISOString().replace("T", " ").slice(0, 16)} UTC)`;
 }
 
 function isBillingBlock(inner) {
@@ -1241,11 +1274,8 @@ export class QoderExecutor extends BaseExecutor {
     const maxQueueWaitMs = qoderQueueMaxWaitMs();
     const waitStartedAt = Date.now();
     let lastQueueInfo = null;
-    // A p3 account warms out of the queue by being used, so a fixed wall-clock
-    // budget is the wrong give-up rule: it either cuts the warm-up short (the
-    // account then gets locked and never warms again) or blocks too long on a
-    // genuinely stuck request. Give up only when the queue has also stopped
-    // moving between polls.
+    // A p3 account can warm out of the queue while the request waits. Extend
+    // the budget only when status/position actually progresses between polls.
     let stagnantPolls = 0;
     let statusPollsEnabled = true;
     // Guards the "status says ready" fast path: one free replay, then stop
@@ -1354,12 +1384,9 @@ export class QoderExecutor extends BaseExecutor {
         return { response: wrapped, url: sent.url, headers: sent.headers, transformedBody: sent.transformedBody };
       }
 
-      // Track whether the queue actually moved since the previous poll. Two
-      // identical snapshots in a row is the real "stuck" signal.
       const progressed = isQueueProgressing(lastQueueInfo, queueInfo);
       lastQueueInfo = queueInfo;
       stagnantPolls = progressed ? 0 : stagnantPolls + 1;
-
       const waitedMs = Date.now() - waitStartedAt;
       if (waitedMs >= maxQueueWaitMs && stagnantPolls >= 2) {
         log?.warn?.(
