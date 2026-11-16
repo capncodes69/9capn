@@ -4,7 +4,7 @@ Fork of [decolua/9router](https://github.com/decolua/9router) that fixes the Cod
 (`cbai/*`) provider. 9router's own README was removed — it documents a tree you are not
 running. This file covers only what the fork changes.
 
-Base: 9router `v0.5.112` (`1fe586bb`) · 12 commits on top · code diff **20 files, +1776 / −22**
+Base: 9router `v0.5.119` (`1855aa44`) · upstream master merged locally; fork patches retained.
 
 ---
 
