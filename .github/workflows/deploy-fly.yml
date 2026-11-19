@@ -1,8 +1,8 @@
-# Deploys the gateway to Fly.io (app `9capnrouter`; see fly.toml).
+# Deploys the gateway to Fly.io (app `9capncode`; see fly.toml).
 #
 # Required repository secret:
-#   FLY_API_TOKEN — deploy-scoped token: `fly tokens create deploy -a 9capnrouter`
-#   Add it with: gh secret set FLY_API_TOKEN
+#   FLY_DEPLOY_TOKEN — deploy-scoped token for app 9capncode.
+#   Add it with: gh secret set FLY_DEPLOY_TOKEN
 #
 # Runtime secrets (JWT_SECRET, API_KEY_SECRET, INITIAL_PASSWORD, …) are set once
 # with `fly secrets set` and survive every deploy. They are deliberately absent
@@ -35,13 +35,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Require FLY_API_TOKEN
+      - name: Require FLY_DEPLOY_TOKEN
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_DEPLOY_TOKEN }}
         run: |
           if [ -z "$FLY_API_TOKEN" ]; then
-            echo "::error::FLY_API_TOKEN is not set for this repository."
-            echo "::error::Create one with 'fly tokens create deploy -a 9capnrouter', then add it under Settings -> Secrets and variables -> Actions."
+            echo "::error::FLY_DEPLOY_TOKEN is not set for this repository."
             exit 1
           fi
 
@@ -52,5 +51,5 @@ jobs:
       # between runs and the Next.js build never touches the runner's disk.
       - name: Deploy
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_DEPLOY_TOKEN }}
         run: flyctl deploy --config fly.toml --remote-only
